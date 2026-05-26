@@ -8,7 +8,7 @@ import { BottomTabInset, Spacing } from '@/constants/theme';
 import { useSQLiteContext } from '@/db';
 import { useTheme } from '@/hooks/use-theme';
 import { generateProductReport, sharePdf } from '@/services/pdf-generator';
-import type { ColumnConfig, Inspection, InspectionPointConfig, InspectionResult, Product, Severity } from '@/types';
+import type { ColumnConfig, GlobalInspectionPoint, Group, Inspection, InspectionPointConfig, InspectionResult, PointType, Product, Severity, ToleranceType } from '@/types';
 
 interface ProductReport {
   product: Product;
@@ -25,6 +25,7 @@ export default function ReportScreen() {
   const [loading, setLoading] = useState(true);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [reports, setReports] = useState<ProductReport[]>([]);
+  const [globalInspectionPoints, setGlobalInspectionPoints] = useState<GlobalInspectionPoint[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [sharing, setSharing] = useState(false);
 
@@ -37,6 +38,7 @@ export default function ReportScreen() {
     try {
       const inspRow = await db.getFirstAsync<{
         id: string; date: string; units_inspected: number; batch_size: number; status: string;
+        supplier: string | null; location: string | null; invoice_no: string | null;
       }>('SELECT * FROM inspections WHERE id = ?', [id]);
       if (!inspRow) return;
 
@@ -54,6 +56,25 @@ export default function ReportScreen() {
         if (p) products.push({ id: p.id, name: p.name, attributes: JSON.parse(p.attributes) });
       }
 
+      const gipRows = await db.getAllAsync<{
+        key: string; label: string; visible: number; is_numeric: number;
+        tolerance_type: string | null; tolerance_value: number | null;
+        group_name: string | null; severity: string; sort_order: number; instructions: string | null;
+      }>('SELECT * FROM global_inspection_points ORDER BY sort_order');
+      setGlobalInspectionPoints(gipRows.map((r) => ({
+        key: r.key,
+        label: r.label,
+        visible: r.visible === 1,
+        isNumeric: r.is_numeric === 1,
+        severity: r.severity as Severity,
+        group: r.group_name ?? undefined,
+        tolerance: r.tolerance_type && r.tolerance_value != null
+          ? { type: r.tolerance_type as ToleranceType, value: r.tolerance_value }
+          : undefined,
+        instructions: r.instructions ?? undefined,
+        sortOrder: r.sort_order,
+      })));
+
       const insp: Inspection = {
         id: inspRow.id,
         date: inspRow.date,
@@ -61,6 +82,9 @@ export default function ReportScreen() {
         unitsInspected: inspRow.units_inspected,
         batchSize: inspRow.batch_size,
         status: inspRow.status as Inspection['status'],
+        supplier: inspRow.supplier ?? undefined,
+        location: inspRow.location ?? undefined,
+        invoiceNo: inspRow.invoice_no ?? undefined,
       };
       setInspection(insp);
       setReports(products.map((p) => ({ product: p, pdfUri: null, generating: false, error: null })));
@@ -72,7 +96,7 @@ export default function ReportScreen() {
   async function generateReport(index: number) {
     if (!inspection) return;
     const pr = reports[index];
-    if (!pr || pr.generating || pr.pdfUri) return;
+    if (!pr || pr.generating) return;
 
     setReports((prev) =>
       prev.map((r, i) => (i === index ? { ...r, generating: true, error: null } : r)),
@@ -82,27 +106,48 @@ export default function ReportScreen() {
       const colRows = await db.getAllAsync<{
         key: string; label: string; visible: number; is_numeric: number;
         tolerance_type: string | null; tolerance_value: number | null;
-      }>('SELECT * FROM column_configs WHERE visible = 1');
+        group_name: string | null; severity: string; sort_order: number;
+      }>('SELECT * FROM column_configs WHERE visible = 1 ORDER BY sort_order');
       const columnConfigs: ColumnConfig[] = colRows.map((r) => ({
         key: r.key, label: r.label, visible: true, isNumeric: r.is_numeric === 1,
+        severity: r.severity as Severity,
+        group: r.group_name ?? undefined,
         tolerance: r.tolerance_type && r.tolerance_value != null
           ? { type: r.tolerance_type as 'absolute' | 'percent', value: r.tolerance_value }
           : undefined,
+        sortOrder: r.sort_order,
       }));
 
-      const ipConfigRows = await db.getAllAsync<{ text: string; severity: string }>(
-        'SELECT * FROM inspection_point_configs',
+      const groupRows = await db.getAllAsync<{ name: string; sort_order: number }>(
+        'SELECT name, sort_order FROM groups ORDER BY sort_order',
       );
-      const inspectionPointConfigs: InspectionPointConfig[] = ipConfigRows.map((r) => ({
-        text: r.text, severity: r.severity as Severity,
-      }));
+      const groups: Group[] = groupRows.map((r) => ({ name: r.name, sortOrder: r.sort_order }));
+
+      const productUnitsRow = await db.getFirstAsync<{
+        units_inspected: number; batch_size: number;
+        production_status: number | null; packing_status: number | null;
+      }>(
+        'SELECT units_inspected, batch_size, production_status, packing_status FROM inspection_products WHERE inspection_id = ? AND product_id = ?',
+        [id, pr.product.id],
+      );
+      const productUnits = {
+        unitsInspected: productUnitsRow?.units_inspected ?? 1,
+        batchSize: productUnitsRow?.batch_size ?? 1,
+        productionStatus: productUnitsRow?.production_status ?? undefined,
+        packingStatus: productUnitsRow?.packing_status ?? undefined,
+      };
+
+      const ipConfigRows = await db.getAllAsync<{ text: string }>(
+        'SELECT text FROM inspection_point_configs',
+      );
+      const inspectionPointConfigs: InspectionPointConfig[] = ipConfigRows.map((r) => ({ text: r.text }));
 
       const resultRows = await db.getAllAsync<{
         id: string; inspection_id: string; product_id: string; point_key: string; type: string;
         value: string | null; passed: number; note: string | null; photo_uris: string;
+        sample_size: string | null;
       }>('SELECT * FROM inspection_results WHERE inspection_id = ?', [id]);
 
-      // For inspection points, replace pointKey with text for display
       const ipTextRows = await db.getAllAsync<{ product_id: string; point_index: number; point_text: string }>(
         'SELECT * FROM product_inspection_points WHERE product_id = ?',
         [pr.product.id],
@@ -119,11 +164,12 @@ export default function ReportScreen() {
           inspectionId: r.inspection_id,
           productId: r.product_id,
           pointKey,
-          type: r.type as 'attribute' | 'inspection_point',
+          type: r.type as PointType,
           value: r.value ?? undefined,
           passed: r.passed === 1,
           note: r.note ?? undefined,
           photoUris: JSON.parse(r.photo_uris || '[]'),
+          sampleSize: r.sample_size ?? undefined,
         };
       });
 
@@ -133,6 +179,12 @@ export default function ReportScreen() {
         results,
         columnConfigs,
         inspectionPointConfigs,
+        groups,
+        productUnits,
+        productInspectionPoints: ipTextRows
+          .sort((a, b) => a.point_index - b.point_index)
+          .map((r) => ({ pointIndex: r.point_index, pointText: r.point_text })),
+        globalInspectionPoints,
       });
 
       setReports((prev) =>
@@ -147,6 +199,13 @@ export default function ReportScreen() {
     }
   }
 
+  function regenerate(index: number) {
+    setReports((prev) =>
+      prev.map((r, i) => (i === index ? { ...r, pdfUri: null, error: null } : r)),
+    );
+    generateReport(index);
+  }
+
   async function handleShare(index: number) {
     const pr = reports[index];
     if (!pr?.pdfUri) {
@@ -156,7 +215,7 @@ export default function ReportScreen() {
     setSharing(true);
     try {
       await sharePdf(pr.pdfUri);
-    } catch (err) {
+    } catch {
       // error handled by OS share sheet
     } finally {
       setSharing(false);
@@ -212,7 +271,7 @@ export default function ReportScreen() {
       )}
 
       <ScrollView
-        contentContainerStyle={{ padding: Spacing.three, paddingBottom: 120 + BottomTabInset }}>
+        contentContainerStyle={{ padding: Spacing.three, paddingBottom: 140 + BottomTabInset }}>
         {currentReport && (
           <View style={[styles.reportCard, { backgroundColor: theme.backgroundElement }]}>
             <ThemedText type="small" style={styles.productName}>
@@ -254,14 +313,25 @@ export default function ReportScreen() {
             </ThemedText>
           </View>
         ) : (
-          <Pressable
-            onPress={() => handleShare(selectedIndex)}
-            disabled={sharing}
-            style={[styles.shareBtn, { opacity: sharing ? 0.7 : 1 }]}>
-            <ThemedText style={styles.shareBtnText}>
-              {currentReport?.pdfUri ? '⬆ Share PDF' : '⬆ Generate & Share PDF'}
-            </ThemedText>
-          </Pressable>
+          <View style={styles.btnColumn}>
+            <Pressable
+              onPress={() => handleShare(selectedIndex)}
+              disabled={sharing}
+              style={[styles.shareBtn, { opacity: sharing ? 0.7 : 1 }]}>
+              <ThemedText style={styles.shareBtnText}>
+                {currentReport?.pdfUri ? '⬆ Share PDF' : '⬆ Generate & Share PDF'}
+              </ThemedText>
+            </Pressable>
+            {currentReport?.pdfUri && (
+              <Pressable
+                onPress={() => regenerate(selectedIndex)}
+                style={[styles.regenerateBtn, { backgroundColor: theme.backgroundElement }]}>
+                <ThemedText style={[styles.regenerateBtnText, { color: theme.textSecondary }]}>
+                  ↺ Regenerate PDF
+                </ThemedText>
+              </Pressable>
+            )}
+          </View>
         )}
       </View>
     </ThemedView>
@@ -315,6 +385,7 @@ const styles = StyleSheet.create({
     padding: Spacing.three,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
+  btnColumn: { gap: Spacing.two },
   generatingRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -329,4 +400,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   shareBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
+  regenerateBtn: {
+    borderRadius: 12,
+    padding: Spacing.two,
+    alignItems: 'center',
+  },
+  regenerateBtnText: { fontWeight: '600', fontSize: 14 },
 });

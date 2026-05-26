@@ -1,6 +1,6 @@
-export type Severity = 'critical' | 'major' | 'minor';
+export type Severity = 'high' | 'medium' | 'low';
 export type InspectionStatus = 'in_progress' | 'completed';
-export type PointType = 'attribute' | 'inspection_point';
+export type PointType = 'attribute' | 'inspection_point' | 'global_inspection_point';
 export type ToleranceType = 'absolute' | 'percent';
 
 export interface Product {
@@ -9,17 +9,27 @@ export interface Product {
   attributes: Record<string, string | number>;
 }
 
+export interface Group {
+  name: string;
+  sortOrder: number;
+}
+
 export interface ColumnConfig {
   key: string;
   label: string;
   visible: boolean;
   isNumeric: boolean;
+  severity: Severity;
+  group?: string;
   tolerance?: { type: ToleranceType; value: number };
+  instructions?: string;
+  sortOrder: number;
 }
+
+export type GlobalInspectionPoint = ColumnConfig;
 
 export interface InspectionPointConfig {
   text: string;
-  severity: Severity;
 }
 
 export interface ProductInspectionPoint {
@@ -35,6 +45,18 @@ export interface Inspection {
   unitsInspected: number;
   batchSize: number;
   status: InspectionStatus;
+  supplier?: string;
+  location?: string;
+  invoiceNo?: string;
+}
+
+export interface InspectionProduct {
+  inspectionId: string;
+  productId: string;
+  unitsInspected: number;
+  batchSize: number;
+  productionStatus?: number;
+  packingStatus?: number;
 }
 
 export interface InspectionResult {
@@ -47,6 +69,7 @@ export interface InspectionResult {
   passed: boolean;
   note?: string;
   photoUris: string[];
+  sampleSize?: string;
 }
 
 export interface ParsedExcelData {
@@ -59,6 +82,7 @@ export interface ColumnMeta {
   key: string;
   label: string;
   isNumeric: boolean;
+  sortOrder: number;
 }
 
 export interface ImportResult {
@@ -66,4 +90,29 @@ export interface ImportResult {
   columnCount: number;
   inspectionPointCount: number;
   importDate: string;
+}
+
+export interface ParsedColumnSetting {
+  key: string;
+  label: string;
+  visible: boolean;
+  isNumeric: boolean;
+  severity: Severity;
+  group: string | null;
+  toleranceType: ToleranceType | null;
+  toleranceValue: number | null;
+  instructions: string | null;
+}
+
+export interface ParsedSettingsData {
+  columnSettings: ParsedColumnSetting[];
+  groups: string[];
+  globalInspectionPoints: ParsedColumnSetting[];
+}
+
+export interface SettingsImportResult {
+  appliedCount: number;
+  skippedCount: number;
+  groupCount: number;
+  globalInspectionPointCount: number;
 }

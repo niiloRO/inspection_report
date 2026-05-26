@@ -3,45 +3,51 @@ import { StyleSheet, TextInput, View } from 'react-native';
 
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import type { Severity } from '@/types';
 
 import { ThemedText } from '../themed-text';
 import { PhotoThumbnail } from './photo-thumbnail';
-import { SeverityBadge } from './severity-badge';
 
 interface Props {
   text: string;
-  severity: Severity;
   photoNumber: number;
   initialPassed: boolean | null;
   initialNote: string;
+  initialSampleSize: string;
   photoUris: string[];
-  onToggle: (passed: boolean) => void;
+  onToggle: (passed: boolean | null) => void;
   onNoteChange: (note: string) => void;
+  onSampleSizeChange: (sampleSize: string) => void;
   onAddPhoto: () => void;
   onRemovePhoto: (uri: string) => void;
 }
 
 export function InspectionPointRow({
   text,
-  severity,
   photoNumber,
   initialPassed,
   initialNote,
+  initialSampleSize,
   photoUris,
   onToggle,
   onNoteChange,
+  onSampleSizeChange,
   onAddPhoto,
   onRemovePhoto,
 }: Props) {
   const theme = useTheme();
   const [passed, setPassed] = useState<boolean | null>(initialPassed);
   const [note, setNote] = useState(initialNote);
+  const [sampleSize, setSampleSize] = useState(initialSampleSize);
   const [showNote, setShowNote] = useState(!!initialNote);
 
   function handleToggle(value: boolean) {
-    setPassed(value);
-    onToggle(value);
+    if (passed === value) {
+      setPassed(null);
+      onToggle(null);
+    } else {
+      setPassed(value);
+      onToggle(value);
+    }
   }
 
   function handleNote(text: string) {
@@ -67,8 +73,16 @@ export function InspectionPointRow({
             </ThemedText>
           )}
         </View>
-        <SeverityBadge severity={severity} />
       </View>
+
+      <TextInput
+        style={[styles.sampleSizeInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
+        value={sampleSize}
+        onChangeText={(t) => { setSampleSize(t); onSampleSizeChange(t); }}
+        placeholder="Sample size..."
+        placeholderTextColor={theme.textSecondary}
+        returnKeyType="done"
+      />
 
       <View style={styles.actions}>
         <View style={styles.toggleRow}>
@@ -195,6 +209,13 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 10,
     fontWeight: '700',
+  },
+  sampleSizeInput: {
+    borderRadius: 6,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 4,
+    fontSize: 12,
+    marginBottom: Spacing.one,
   },
   noteInput: {
     marginTop: Spacing.two,

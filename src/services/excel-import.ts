@@ -41,7 +41,7 @@ export function parseExcel(base64: string): ParsedExcelData {
     if (!label) continue;
     const key = generateColumnKey(label) || `col_${colIdx}`;
     const sampleValues = dataRows.slice(0, 20).map((row) => row[colIdx]);
-    columnMeta.push({ key, label, isNumeric: isNumericColumn(sampleValues) });
+    columnMeta.push({ key, label, isNumeric: isNumericColumn(sampleValues), sortOrder: colIdx - 1 });
   }
 
   const products: Product[] = [];

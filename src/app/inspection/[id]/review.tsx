@@ -9,11 +9,11 @@ import { BottomTabInset, Spacing } from '@/constants/theme';
 import { useSQLiteContext } from '@/db';
 import { useInspections } from '@/hooks/use-inspections';
 import { useTheme } from '@/hooks/use-theme';
-import type { Inspection, InspectionResult, Severity } from '@/types';
+import type { Inspection, Severity } from '@/types';
 
 interface FailedItem {
   label: string;
-  severity: Severity;
+  severity: Severity | null;
   productName: string;
   note?: string;
 }
@@ -59,15 +59,15 @@ export default function ReviewScreen() {
         product_id: string; point_key: string; type: string; passed: number; note: string | null;
       }>('SELECT * FROM inspection_results WHERE inspection_id = ?', [id]);
 
-      const ipConfigRows = await db.getAllAsync<{ text: string; severity: string }>(
-        'SELECT * FROM inspection_point_configs',
+      const colRows = await db.getAllAsync<{ key: string; label: string; severity: string }>(
+        'SELECT key, label, severity FROM column_configs WHERE visible = 1',
       );
-      const ipConfigMap = new Map(ipConfigRows.map((r) => [r.text, r.severity as Severity]));
+      const colMap = new Map(colRows.map((r) => [r.key, { label: r.label, severity: r.severity as Severity }]));
 
-      const colRows = await db.getAllAsync<{ key: string; label: string }>(
-        'SELECT key, label FROM column_configs WHERE visible = 1',
+      const gipRows = await db.getAllAsync<{ key: string; label: string; severity: string }>(
+        'SELECT key, label, severity FROM global_inspection_points',
       );
-      const colMap = new Map(colRows.map((r) => [r.key, r.label]));
+      const gipMap = new Map(gipRows.map((r) => [r.key, { label: r.label, severity: r.severity as Severity }]));
 
       const ipTextRows = await db.getAllAsync<{ product_id: string; point_index: number; point_text: string }>(
         'SELECT * FROM product_inspection_points',
@@ -86,17 +86,24 @@ export default function ReviewScreen() {
           passed++;
         } else {
           let label = r.point_key;
-          let severity: Severity = 'minor';
+          let severity: Severity | null = 'medium';
 
           if (r.type === 'attribute') {
             const colKey = r.point_key.replace('attr:', '');
-            label = colMap.get(colKey) ?? colKey;
+            const colMeta = colMap.get(colKey);
+            label = colMeta?.label ?? colKey;
+            severity = colMeta?.severity ?? 'medium';
+          } else if (r.type === 'global_inspection_point') {
+            const gipKey = r.point_key.replace('gip:', '');
+            const gipMeta = gipMap.get(gipKey);
+            label = gipMeta?.label ?? gipKey;
+            severity = gipMeta?.severity ?? 'medium';
           } else {
             const text = ipTextMap.get(`${r.product_id}:${r.point_key}`);
             if (text) {
               label = text.length > 80 ? text.slice(0, 80) + '…' : text;
-              severity = ipConfigMap.get(text) ?? 'minor';
             }
+            severity = null;
           }
 
           failures.push({
@@ -108,9 +115,9 @@ export default function ReviewScreen() {
         }
       }
 
-      // Sort: critical → major → minor
-      const order: Record<Severity, number> = { critical: 0, major: 1, minor: 2 };
-      failures.sort((a, b) => order[a.severity] - order[b.severity]);
+      // Sort: high → medium → low → inspection points (null)
+      const order: Record<Severity, number> = { high: 0, medium: 1, low: 2 };
+      failures.sort((a, b) => (a.severity ? order[a.severity] : 3) - (b.severity ? order[b.severity] : 3));
 
       setInspection({
         id: inspRow.id,
@@ -193,7 +200,7 @@ export default function ReviewScreen() {
         renderItem={({ item }) => (
           <View style={[styles.failureItem, { backgroundColor: theme.backgroundElement }]}>
             <View style={styles.failureHeader}>
-              <SeverityBadge severity={item.severity} />
+              {item.severity ? <SeverityBadge severity={item.severity} /> : null}
               <ThemedText type="small" themeColor="textSecondary">
                 {item.productName}
               </ThemedText>

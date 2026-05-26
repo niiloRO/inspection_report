@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import {
   FlatList,
   Pressable,
+  ScrollView,
   StyleSheet,
   TextInput,
   View,
@@ -15,6 +16,13 @@ import { useInspections } from '@/hooks/use-inspections';
 import { useProducts } from '@/hooks/use-products';
 import { useTheme } from '@/hooks/use-theme';
 import type { Product } from '@/types';
+
+interface ProductUnits {
+  units: string;
+  batch: string;
+  productionStatus: string;
+  packingStatus: string;
+}
 
 function ProductItem({
   product,
@@ -58,8 +66,10 @@ export default function NewInspectionScreen() {
 
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [units, setUnits] = useState('');
-  const [batch, setBatch] = useState('');
+  const [productUnits, setProductUnits] = useState<Map<string, ProductUnits>>(new Map());
+  const [supplier, setSupplier] = useState('');
+  const [location, setLocation] = useState('');
+  const [invoiceNo, setInvoiceNo] = useState('');
   const [starting, setStarting] = useState(false);
 
   const filtered = search(query);
@@ -74,24 +84,61 @@ export default function NewInspectionScreen() {
       }
       return next;
     });
+    setProductUnits((prev) => {
+      const next = new Map(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.set(id, { units: '', batch: '', productionStatus: '', packingStatus: '' });
+      }
+      return next;
+    });
   }
 
+  function updateProductUnits(id: string, field: keyof ProductUnits, value: string) {
+    setProductUnits((prev) => {
+      const next = new Map(prev);
+      const current = next.get(id) ?? { units: '', batch: '', productionStatus: '', packingStatus: '' };
+      next.set(id, { ...current, [field]: value });
+      return next;
+    });
+  }
+
+  const canStart =
+    selected.size > 0 &&
+    [...selected].every((id) => {
+      const u = productUnits.get(id);
+      return !!u?.units && !!u?.batch;
+    });
+
   async function handleStart() {
-    if (selected.size === 0 || !units || !batch) return;
+    if (!canStart) return;
     setStarting(true);
     try {
+      const units = new Map<string, { unitsInspected: number; batchSize: number; productionStatus?: number; packingStatus?: number }>();
+      for (const id of selected) {
+        const u = productUnits.get(id)!;
+        const prodStatus = parseFloat(u.productionStatus);
+        const packStatus = parseFloat(u.packingStatus);
+        units.set(id, {
+          unitsInspected: parseInt(u.units, 10),
+          batchSize: parseInt(u.batch, 10),
+          productionStatus: isNaN(prodStatus) ? undefined : Math.min(100, Math.max(0, prodStatus)),
+          packingStatus: isNaN(packStatus) ? undefined : Math.min(100, Math.max(0, packStatus)),
+        });
+      }
       const id = await createInspection({
         productIds: [...selected],
-        unitsInspected: parseInt(units, 10),
-        batchSize: parseInt(batch, 10),
+        supplier: supplier.trim() || undefined,
+        location: location.trim() || undefined,
+        invoiceNo: invoiceNo.trim() || undefined,
+        productUnits: units,
       });
       router.replace({ pathname: '/inspection/[id]/template', params: { id } });
     } finally {
       setStarting(false);
     }
   }
-
-  const canStart = selected.size > 0 && !!units && !!batch;
 
   if (products.length === 0) {
     return (
@@ -114,6 +161,8 @@ export default function NewInspectionScreen() {
       </ThemedView>
     );
   }
+
+  const selectedProducts = products.filter((p) => selected.has(p.id));
 
   return (
     <ThemedView style={styles.container}>
@@ -143,7 +192,7 @@ export default function NewInspectionScreen() {
             onToggle={() => toggleProduct(item.id)}
           />
         )}
-        contentContainerStyle={{ padding: Spacing.two, paddingBottom: 220 }}
+        contentContainerStyle={{ padding: Spacing.two, paddingBottom: 300 }}
       />
 
       <View
@@ -155,37 +204,96 @@ export default function NewInspectionScreen() {
             paddingBottom: BottomTabInset + Spacing.two,
           },
         ]}>
-        <ThemedText type="small" style={styles.selectedCount}>
-          {selected.size === 0 ? 'No products selected' : `${selected.size} product${selected.size > 1 ? 's' : ''} selected`}
-        </ThemedText>
-        <View style={styles.batchRow}>
-          <View style={styles.batchField}>
-            <ThemedText type="small" themeColor="textSecondary">
-              Units inspected
-            </ThemedText>
-            <TextInput
-              style={[styles.batchInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
-              value={units}
-              onChangeText={setUnits}
-              keyboardType="number-pad"
-              placeholder="0"
-              placeholderTextColor={theme.textSecondary}
-            />
-          </View>
-          <View style={styles.batchField}>
-            <ThemedText type="small" themeColor="textSecondary">
-              Total batch
-            </ThemedText>
-            <TextInput
-              style={[styles.batchInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
-              value={batch}
-              onChangeText={setBatch}
-              keyboardType="number-pad"
-              placeholder="0"
-              placeholderTextColor={theme.textSecondary}
-            />
-          </View>
+        <View style={styles.globalInputs}>
+          <TextInput
+            style={[styles.globalInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
+            value={supplier}
+            onChangeText={setSupplier}
+            placeholder="Supplier (optional)"
+            placeholderTextColor={theme.textSecondary}
+          />
+          <TextInput
+            style={[styles.globalInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
+            value={location}
+            onChangeText={setLocation}
+            placeholder="Location (optional)"
+            placeholderTextColor={theme.textSecondary}
+          />
+          <TextInput
+            style={[styles.globalInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
+            value={invoiceNo}
+            onChangeText={setInvoiceNo}
+            placeholder="Invoice NO (optional)"
+            placeholderTextColor={theme.textSecondary}
+          />
         </View>
+
+        {selectedProducts.length > 0 && (
+          <ScrollView style={styles.perProductScroll} nestedScrollEnabled>
+            {selectedProducts.map((p) => {
+              const u = productUnits.get(p.id) ?? { units: '', batch: '' };
+              return (
+                <View key={p.id} style={[styles.perProductRow, { borderTopColor: theme.backgroundElement }]}>
+                  <ThemedText type="small" style={styles.perProductName} numberOfLines={1}>
+                    {p.name}
+                  </ThemedText>
+                  <View style={styles.perProductInputs}>
+                    <View style={styles.batchField}>
+                      <ThemedText type="small" themeColor="textSecondary">Units</ThemedText>
+                      <TextInput
+                        style={[styles.batchInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
+                        value={u.units}
+                        onChangeText={(v) => updateProductUnits(p.id, 'units', v)}
+                        keyboardType="number-pad"
+                        placeholder="0"
+                        placeholderTextColor={theme.textSecondary}
+                      />
+                    </View>
+                    <View style={styles.batchField}>
+                      <ThemedText type="small" themeColor="textSecondary">Batch</ThemedText>
+                      <TextInput
+                        style={[styles.batchInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
+                        value={u.batch}
+                        onChangeText={(v) => updateProductUnits(p.id, 'batch', v)}
+                        keyboardType="number-pad"
+                        placeholder="0"
+                        placeholderTextColor={theme.textSecondary}
+                      />
+                    </View>
+                    <View style={styles.batchField}>
+                      <ThemedText type="small" themeColor="textSecondary">Prod %</ThemedText>
+                      <TextInput
+                        style={[styles.batchInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
+                        value={u.productionStatus}
+                        onChangeText={(v) => updateProductUnits(p.id, 'productionStatus', v)}
+                        keyboardType="decimal-pad"
+                        placeholder="—"
+                        placeholderTextColor={theme.textSecondary}
+                      />
+                    </View>
+                    <View style={styles.batchField}>
+                      <ThemedText type="small" themeColor="textSecondary">Pack %</ThemedText>
+                      <TextInput
+                        style={[styles.batchInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
+                        value={u.packingStatus}
+                        onChangeText={(v) => updateProductUnits(p.id, 'packingStatus', v)}
+                        keyboardType="decimal-pad"
+                        placeholder="—"
+                        placeholderTextColor={theme.textSecondary}
+                      />
+                    </View>
+                  </View>
+                </View>
+              );
+            })}
+          </ScrollView>
+        )}
+
+        {selected.size === 0 && (
+          <ThemedText type="small" themeColor="textSecondary" style={styles.selectedCount}>
+            Select products above to start
+          </ThemedText>
+        )}
 
         <Pressable
           onPress={handleStart}
@@ -253,8 +361,18 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     gap: Spacing.two,
   },
+  globalInputs: { gap: Spacing.one },
+  globalInput: {
+    borderRadius: 8,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.one + 2,
+    fontSize: 14,
+  },
+  perProductScroll: { maxHeight: 180 },
+  perProductRow: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: Spacing.two, gap: 4 },
+  perProductName: { fontWeight: '600', flex: 1 },
+  perProductInputs: { flexDirection: 'row', gap: Spacing.three },
   selectedCount: { textAlign: 'center' },
-  batchRow: { flexDirection: 'row', gap: Spacing.three },
   batchField: { flex: 1, gap: 4 },
   batchInput: {
     borderRadius: 8,

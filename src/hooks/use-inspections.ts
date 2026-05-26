@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 import { useSQLiteContext } from '@/db';
 import { deleteInspectionPhotos } from '@/services/photo-service';
-import type { Inspection, InspectionResult, InspectionStatus, PointType } from '@/types';
+import type { Inspection, InspectionProduct, InspectionResult, InspectionStatus, PointType } from '@/types';
 
 interface InspectionRow {
   id: string;
@@ -10,10 +10,17 @@ interface InspectionRow {
   units_inspected: number;
   batch_size: number;
   status: string;
+  supplier: string | null;
+  location: string | null;
+  invoice_no: string | null;
 }
 
 interface InspectionProductRow {
   product_id: string;
+  units_inspected: number;
+  batch_size: number;
+  production_status: number | null;
+  packing_status: number | null;
 }
 
 interface ResultRow {
@@ -26,6 +33,7 @@ interface ResultRow {
   passed: number;
   note: string | null;
   photo_uris: string;
+  sample_size: string | null;
 }
 
 function generateId(): string {
@@ -33,7 +41,7 @@ function generateId(): string {
 }
 
 async function loadProductIds(db: ReturnType<typeof useSQLiteContext>, inspectionId: string): Promise<string[]> {
-  const rows = await db.getAllAsync<InspectionProductRow>(
+  const rows = await db.getAllAsync<{ product_id: string }>(
     'SELECT product_id FROM inspection_products WHERE inspection_id = ?',
     [inspectionId],
   );
@@ -48,6 +56,9 @@ function mapRow(r: InspectionRow, productIds: string[]): Inspection {
     unitsInspected: r.units_inspected,
     batchSize: r.batch_size,
     status: r.status as InspectionStatus,
+    supplier: r.supplier ?? undefined,
+    location: r.location ?? undefined,
+    invoiceNo: r.invoice_no ?? undefined,
   };
 }
 
@@ -62,6 +73,7 @@ function mapResultRow(r: ResultRow): InspectionResult {
     passed: r.passed === 1,
     note: r.note ?? undefined,
     photoUris: JSON.parse(r.photo_uris || '[]'),
+    sampleSize: r.sample_size ?? undefined,
   };
 }
 
@@ -95,6 +107,22 @@ export function useInspections() {
     return mapRow(row, productIds);
   }
 
+  async function getInspectionProduct(inspectionId: string, productId: string): Promise<InspectionProduct | null> {
+    const row = await db.getFirstAsync<InspectionProductRow>(
+      'SELECT product_id, units_inspected, batch_size, production_status, packing_status FROM inspection_products WHERE inspection_id = ? AND product_id = ?',
+      [inspectionId, productId],
+    );
+    if (!row) return null;
+    return {
+      inspectionId,
+      productId: row.product_id,
+      unitsInspected: row.units_inspected,
+      batchSize: row.batch_size,
+      productionStatus: row.production_status ?? undefined,
+      packingStatus: row.packing_status ?? undefined,
+    };
+  }
+
   async function getResults(inspectionId: string): Promise<InspectionResult[]> {
     const rows = await db.getAllAsync<ResultRow>(
       'SELECT * FROM inspection_results WHERE inspection_id = ?',
@@ -105,20 +133,23 @@ export function useInspections() {
 
   async function createInspection(data: {
     productIds: string[];
-    unitsInspected: number;
-    batchSize: number;
+    supplier?: string;
+    location?: string;
+    invoiceNo?: string;
+    productUnits: Map<string, { unitsInspected: number; batchSize: number; productionStatus?: number; packingStatus?: number }>;
   }): Promise<string> {
     const id = generateId();
     const date = new Date().toISOString();
     await db.withTransactionAsync(async () => {
       await db.runAsync(
-        'INSERT INTO inspections (id, date, units_inspected, batch_size, status) VALUES (?, ?, ?, ?, ?)',
-        [id, date, data.unitsInspected, data.batchSize, 'in_progress'],
+        'INSERT INTO inspections (id, date, units_inspected, batch_size, status, supplier, location, invoice_no) VALUES (?, ?, 1, 1, ?, ?, ?, ?)',
+        [id, date, 'in_progress', data.supplier ?? null, data.location ?? null, data.invoiceNo ?? null],
       );
       for (const productId of data.productIds) {
+        const units = data.productUnits.get(productId) ?? { unitsInspected: 1, batchSize: 1 };
         await db.runAsync(
-          'INSERT INTO inspection_products (inspection_id, product_id) VALUES (?, ?)',
-          [id, productId],
+          'INSERT INTO inspection_products (inspection_id, product_id, units_inspected, batch_size, production_status, packing_status) VALUES (?, ?, ?, ?, ?, ?)',
+          [id, productId, units.unitsInspected, units.batchSize, units.productionStatus ?? null, units.packingStatus ?? null],
         );
       }
     });
@@ -130,13 +161,14 @@ export function useInspections() {
     const id = generateId();
     await db.runAsync(
       `INSERT INTO inspection_results
-         (id, inspection_id, product_id, point_key, type, value, passed, note, photo_uris)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (id, inspection_id, product_id, point_key, type, value, passed, note, photo_uris, sample_size)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(inspection_id, product_id, point_key) DO UPDATE SET
          value = excluded.value,
          passed = excluded.passed,
          note = excluded.note,
-         photo_uris = excluded.photo_uris`,
+         photo_uris = excluded.photo_uris,
+         sample_size = excluded.sample_size`,
       [
         id,
         result.inspectionId,
@@ -147,6 +179,7 @@ export function useInspections() {
         result.passed ? 1 : 0,
         result.note ?? null,
         JSON.stringify(result.photoUris),
+        result.sampleSize ?? null,
       ],
     );
   }
@@ -154,6 +187,13 @@ export function useInspections() {
   async function completeInspection(id: string): Promise<void> {
     await db.runAsync("UPDATE inspections SET status = 'completed' WHERE id = ?", [id]);
     await loadInspections();
+  }
+
+  async function deleteResult(inspectionId: string, productId: string, pointKey: string): Promise<void> {
+    await db.runAsync(
+      'DELETE FROM inspection_results WHERE inspection_id = ? AND product_id = ? AND point_key = ?',
+      [inspectionId, productId, pointKey],
+    );
   }
 
   async function deleteInspection(id: string): Promise<void> {
@@ -170,9 +210,11 @@ export function useInspections() {
     inspections,
     reload: loadInspections,
     getInspection,
+    getInspectionProduct,
     getResults,
     createInspection,
     upsertResult,
+    deleteResult,
     completeInspection,
     deleteInspection,
   };

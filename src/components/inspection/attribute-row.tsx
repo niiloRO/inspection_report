@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StyleSheet, TextInput, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -12,9 +12,15 @@ interface Props {
   column: ColumnConfig;
   referenceValue: string | number | undefined;
   initialValue: string;
-  initialPassed: boolean;
+  initialPassed: boolean | null;
+  initialNote: string;
+  initialSampleSize: string;
   photoUris: string[];
+  instructions?: string;
   onChangeValue: (value: string, passed: boolean) => void;
+  onToggle: (passed: boolean | null) => void;
+  onNoteChange: (note: string) => void;
+  onSampleSizeChange: (sampleSize: string) => void;
   onAddPhoto: () => void;
   onRemovePhoto: (uri: string) => void;
 }
@@ -35,39 +41,177 @@ function computePassed(
   return (Math.abs(measured - ref) / Math.abs(ref)) * 100 <= tolerance.value;
 }
 
+function InstructionsModal({ instructions, onClose }: { instructions: string; onClose: () => void }) {
+  return (
+    <Modal transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.modalOverlay} onPress={onClose}>
+        <Pressable style={styles.modalCard} onPress={() => {}}>
+          <View style={styles.modalHeader}>
+            <ThemedText style={styles.modalTitle}>Instructions</ThemedText>
+            <Pressable onPress={onClose} hitSlop={12} style={styles.modalClose}>
+              <ThemedText style={styles.modalCloseText}>×</ThemedText>
+            </Pressable>
+          </View>
+          <ThemedText style={styles.modalBody}>{instructions}</ThemedText>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 export function AttributeRow({
   column,
   referenceValue,
   initialValue,
+  initialPassed,
+  initialNote,
+  initialSampleSize,
   photoUris,
+  instructions,
   onChangeValue,
+  onToggle,
+  onNoteChange,
+  onSampleSizeChange,
   onAddPhoto,
   onRemovePhoto,
 }: Props) {
   const theme = useTheme();
   const [value, setValue] = useState(initialValue);
-  const passed = computePassed(value, referenceValue, column.tolerance);
+  const [passed, setPassed] = useState<boolean | null>(initialPassed);
+  const [note, setNote] = useState(initialNote);
+  const [sampleSize, setSampleSize] = useState(initialSampleSize);
+  const [showNote, setShowNote] = useState(!!initialNote);
+  const [showInstructions, setShowInstructions] = useState(false);
 
   function handleChange(text: string) {
     setValue(text);
     onChangeValue(text, computePassed(text, referenceValue, column.tolerance));
   }
 
+  function handleToggle(val: boolean) {
+    if (passed === val) {
+      setPassed(null);
+      onToggle(null);
+    } else {
+      setPassed(val);
+      onToggle(val);
+    }
+  }
+
+  function handleNote(text: string) {
+    setNote(text);
+    onNoteChange(text);
+  }
+
+  const labelRow = (
+    <View style={styles.labelRow}>
+      <ThemedText type="small" style={styles.label}>{column.label}</ThemedText>
+      {!!instructions && (
+        <Pressable onPress={() => setShowInstructions(true)} hitSlop={8} style={styles.infoBtn}>
+          <ThemedText style={styles.infoBtnText}>?</ThemedText>
+        </Pressable>
+      )}
+    </View>
+  );
+
+  const refLine = referenceValue !== undefined && referenceValue !== '' ? (
+    <ThemedText type="small" themeColor="textSecondary" style={styles.refValue}>
+      {referenceValue}
+    </ThemedText>
+  ) : null;
+
+  const sampleSizeInput = (
+    <TextInput
+      style={[styles.sampleSizeInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
+      value={sampleSize}
+      onChangeText={(t) => { setSampleSize(t); onSampleSizeChange(t); }}
+      placeholder="Sample size..."
+      placeholderTextColor={theme.textSecondary}
+      returnKeyType="done"
+    />
+  );
+
+  if (!column.isNumeric) {
+    const passedBg = passed === true ? '#27ae60' : theme.backgroundElement;
+    const failedBg = passed === false ? '#e74c3c' : theme.backgroundElement;
+    const passedText = passed === true ? '#fff' : theme.text;
+    const failedText = passed === false ? '#fff' : theme.text;
+
+    return (
+      <View style={[styles.container, { borderBottomColor: theme.backgroundElement }]}>
+        {showInstructions && <InstructionsModal instructions={instructions!} onClose={() => setShowInstructions(false)} />}
+        <View style={styles.header}>
+          {labelRow}
+          {refLine}
+        </View>
+        {sampleSizeInput}
+
+        <View style={styles.actions}>
+          <View style={styles.toggleRow}>
+            <ThemedText
+              style={[styles.toggleBtn, { backgroundColor: passedBg, color: passedText }]}
+              onPress={() => handleToggle(true)}>
+              Pass
+            </ThemedText>
+            <ThemedText
+              style={[styles.toggleBtn, { backgroundColor: failedBg, color: failedText }]}
+              onPress={() => handleToggle(false)}>
+              Fail
+            </ThemedText>
+          </View>
+
+          <View style={styles.iconBtns}>
+            <ThemedText
+              style={[styles.iconBtn, showNote && { color: '#3c87f7' }]}
+              onPress={() => setShowNote(!showNote)}>
+              📝
+            </ThemedText>
+            <View style={styles.cameraWrapper}>
+              <ThemedText style={styles.iconBtn} onPress={onAddPhoto}>📷</ThemedText>
+              {photoUris.length > 0 && (
+                <View style={styles.photoCount}>
+                  <ThemedText style={styles.photoCountText}>{photoUris.length}</ThemedText>
+                </View>
+              )}
+            </View>
+          </View>
+        </View>
+
+        {showNote && (
+          <TextInput
+            style={[styles.noteInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
+            value={note}
+            onChangeText={handleNote}
+            placeholder="Add a note..."
+            placeholderTextColor={theme.textSecondary}
+            multiline
+          />
+        )}
+
+        {photoUris.length > 0 && (
+          <View style={styles.photos}>
+            {photoUris.map((uri, i) => (
+              <PhotoThumbnail key={uri} uri={uri} index={i} onRemove={() => onRemovePhoto(uri)} />
+            ))}
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  // Numeric mode
+  const computedPassed = computePassed(value, referenceValue, column.tolerance);
   const hasValue = value.trim() !== '';
-  const indicatorColor = !hasValue ? theme.textSecondary : passed ? '#27ae60' : '#e74c3c';
+  const indicatorColor = !hasValue ? theme.textSecondary : computedPassed ? '#27ae60' : '#e74c3c';
 
   return (
     <View style={[styles.container, { borderBottomColor: theme.backgroundElement }]}>
+      {showInstructions && <InstructionsModal instructions={instructions!} onClose={() => setShowInstructions(false)} />}
       <View style={styles.header}>
-        <ThemedText type="small" style={styles.label}>
-          {column.label}
-        </ThemedText>
-        {referenceValue !== undefined && referenceValue !== '' && (
-          <ThemedText type="small" themeColor="textSecondary">
-            Ref: {referenceValue}
-          </ThemedText>
-        )}
+        {labelRow}
+        {refLine}
       </View>
+      {sampleSizeInput}
 
       <View style={styles.inputRow}>
         <TextInput
@@ -81,38 +225,47 @@ export function AttributeRow({
           ]}
           value={value}
           onChangeText={handleChange}
-          keyboardType={column.isNumeric ? 'decimal-pad' : 'default'}
-          placeholder={column.isNumeric ? '0.0' : 'Enter value'}
+          keyboardType="decimal-pad"
+          placeholder="0.0"
           placeholderTextColor={theme.textSecondary}
         />
         <View style={[styles.indicator, { backgroundColor: indicatorColor }]}>
           <ThemedText style={styles.indicatorText}>
-            {!hasValue ? '—' : passed ? '✓' : '✗'}
+            {!hasValue ? '—' : computedPassed ? '✓' : '✗'}
           </ThemedText>
         </View>
-        <View style={styles.cameraBtn}>
+        <View style={styles.iconBtns}>
           <ThemedText
-            style={styles.cameraIcon}
-            onPress={onAddPhoto}>
-            📷
+            style={[styles.iconBtn, showNote && { color: '#3c87f7' }]}
+            onPress={() => setShowNote(!showNote)}>
+            📝
           </ThemedText>
-          {photoUris.length > 0 && (
-            <View style={styles.photoCount}>
-              <ThemedText style={styles.photoCountText}>{photoUris.length}</ThemedText>
-            </View>
-          )}
+          <View style={styles.cameraWrapper}>
+            <ThemedText style={styles.iconBtn} onPress={onAddPhoto}>📷</ThemedText>
+            {photoUris.length > 0 && (
+              <View style={styles.photoCount}>
+                <ThemedText style={styles.photoCountText}>{photoUris.length}</ThemedText>
+              </View>
+            )}
+          </View>
         </View>
       </View>
+
+      {showNote && (
+        <TextInput
+          style={[styles.noteInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
+          value={note}
+          onChangeText={handleNote}
+          placeholder="Add a note..."
+          placeholderTextColor={theme.textSecondary}
+          multiline
+        />
+      )}
 
       {photoUris.length > 0 && (
         <View style={styles.photos}>
           {photoUris.map((uri, i) => (
-            <PhotoThumbnail
-              key={uri}
-              uri={uri}
-              index={i}
-              onRemove={() => onRemovePhoto(uri)}
-            />
+            <PhotoThumbnail key={uri} uri={uri} index={i} onRemove={() => onRemovePhoto(uri)} />
           ))}
         </View>
       )}
@@ -127,14 +280,34 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     marginBottom: Spacing.one,
   },
+  labelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   label: {
-    flex: 1,
     fontWeight: '600',
+    flex: 1,
+  },
+  refValue: {
+    fontStyle: 'italic',
+    marginTop: 2,
+    fontSize: 12,
+  },
+  infoBtn: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#3c87f7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  infoBtnText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
   },
   inputRow: {
     flexDirection: 'row',
@@ -161,20 +334,38 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 16,
   },
-  cameraBtn: {
-    position: 'relative',
-    width: 36,
-    height: 36,
+  actions: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
   },
-  cameraIcon: {
+  toggleRow: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+  },
+  toggleBtn: {
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one + 2,
+    borderRadius: 20,
+    fontSize: 14,
+    fontWeight: '700',
+    overflow: 'hidden',
+  },
+  iconBtns: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+    alignItems: 'center',
+  },
+  iconBtn: {
     fontSize: 22,
+  },
+  cameraWrapper: {
+    position: 'relative',
   },
   photoCount: {
     position: 'absolute',
-    top: -2,
-    right: -2,
+    top: -4,
+    right: -4,
     backgroundColor: '#3c87f7',
     borderRadius: 8,
     width: 16,
@@ -187,9 +378,71 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
   },
+  sampleSizeInput: {
+    borderRadius: 6,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 4,
+    fontSize: 12,
+    marginBottom: Spacing.one,
+  },
+  noteInput: {
+    marginTop: Spacing.two,
+    borderRadius: 8,
+    padding: Spacing.two,
+    fontSize: 14,
+    minHeight: 60,
+  },
   photos: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     marginTop: Spacing.two,
+  },
+  // Modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.four,
+  },
+  modalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: Spacing.three,
+    width: '100%',
+    maxWidth: 400,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: Spacing.two,
+  },
+  modalTitle: {
+    fontWeight: '700',
+    fontSize: 16,
+    color: '#1a1a1a',
+  },
+  modalClose: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#f0f0f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCloseText: {
+    fontSize: 18,
+    color: '#333',
+    lineHeight: 20,
+  },
+  modalBody: {
+    fontSize: 14,
+    lineHeight: 22,
+    color: '#333',
   },
 });

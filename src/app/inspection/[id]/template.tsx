@@ -16,8 +16,8 @@ import { BottomTabInset, Spacing } from '@/constants/theme';
 import { useSQLiteContext } from '@/db';
 import { useInspections } from '@/hooks/use-inspections';
 import { useTheme } from '@/hooks/use-theme';
-import { pickPhoto, takePhoto } from '@/services/photo-service';
-import type { ColumnConfig, Inspection, InspectionPointConfig, InspectionResult, Product, ProductInspectionPoint, Severity } from '@/types';
+import { takePhoto } from '@/services/photo-service';
+import type { ColumnConfig, GlobalInspectionPoint, Group, Inspection, InspectionPointConfig, Product, ProductInspectionPoint, Severity } from '@/types';
 
 interface AttributeItem {
   kind: 'attribute';
@@ -29,19 +29,33 @@ interface AttributeItem {
   tolerance?: ColumnConfig['tolerance'];
   productId: string;
   pointKey: string;
+  severity: Severity;
+  group?: string;
+  instructions?: string;
+  groupKey: string;
+  itemType: 'attribute' | 'global_inspection_point';
 }
 
 interface PointItem {
   kind: 'point';
   key: string;
   text: string;
-  severity: Severity;
   productId: string;
   pointKey: string;
   photoNumber: number;
+  groupKey: string;
 }
 
-type SectionItem = AttributeItem | PointItem;
+interface GroupHeaderItem {
+  kind: 'group-header';
+  key: string;
+  label: string;
+  productId: string;
+  pointKey: string;
+  groupKey: string;
+}
+
+type SectionItem = AttributeItem | PointItem | GroupHeaderItem;
 
 interface Section {
   title: string;
@@ -50,9 +64,10 @@ interface Section {
 }
 
 interface ResultEntry {
-  passed: boolean;
+  passed: boolean | null;
   value?: string;
   note?: string;
+  sampleSize?: string;
   photoUris: string[];
 }
 
@@ -79,26 +94,53 @@ async function loadTemplateData(db: ReturnType<typeof useSQLiteContext>, inspect
   }
 
   const colRows = await db.getAllAsync<{
-    key: string; label: string; is_numeric: number; tolerance_type: string | null; tolerance_value: number | null;
-  }>('SELECT * FROM column_configs WHERE visible = 1 ORDER BY label');
+    key: string; label: string; is_numeric: number; tolerance_type: string | null;
+    tolerance_value: number | null; group_name: string | null; severity: string;
+    instructions: string | null; sort_order: number;
+  }>('SELECT * FROM column_configs WHERE visible = 1 ORDER BY sort_order');
   const columns: ColumnConfig[] = colRows.map((r) => ({
     key: r.key,
     label: r.label,
     visible: true,
     isNumeric: r.is_numeric === 1,
+    severity: r.severity as Severity,
+    group: r.group_name ?? undefined,
     tolerance: r.tolerance_type && r.tolerance_value != null
       ? { type: r.tolerance_type as 'absolute' | 'percent', value: r.tolerance_value }
       : undefined,
+    instructions: r.instructions ?? undefined,
+    sortOrder: r.sort_order,
   }));
 
-  const ipConfigRows = await db.getAllAsync<{ text: string; severity: string }>(
-    'SELECT * FROM inspection_point_configs',
-  );
-  const ipConfigs: InspectionPointConfig[] = ipConfigRows.map((r) => ({
-    text: r.text,
+  const gipRows = await db.getAllAsync<{
+    key: string; label: string; is_numeric: number; tolerance_type: string | null;
+    tolerance_value: number | null; group_name: string | null; severity: string;
+    instructions: string | null; sort_order: number;
+  }>('SELECT * FROM global_inspection_points WHERE visible = 1 ORDER BY sort_order');
+  const globalInspectionPoints: GlobalInspectionPoint[] = gipRows.map((r) => ({
+    key: r.key,
+    label: r.label,
+    visible: true,
+    isNumeric: r.is_numeric === 1,
     severity: r.severity as Severity,
+    group: r.group_name ?? undefined,
+    tolerance: r.tolerance_type && r.tolerance_value != null
+      ? { type: r.tolerance_type as 'absolute' | 'percent', value: r.tolerance_value }
+      : undefined,
+    instructions: r.instructions ?? undefined,
+    sortOrder: r.sort_order,
   }));
-  const ipConfigMap = new Map(ipConfigs.map((c) => [c.text, c.severity]));
+
+  const groupRows = await db.getAllAsync<{ name: string; sort_order: number }>(
+    'SELECT name, sort_order FROM groups ORDER BY sort_order',
+  );
+  const groups: Group[] = groupRows.map((r) => ({ name: r.name, sortOrder: r.sort_order }));
+
+  const ipConfigRows = await db.getAllAsync<{ text: string }>(
+    'SELECT text FROM inspection_point_configs',
+  );
+  const ipConfigs: InspectionPointConfig[] = ipConfigRows.map((r) => ({ text: r.text }));
+  const ipConfigSet = new Set(ipConfigs.map((c) => c.text));
 
   const pointsByProduct = new Map<string, ProductInspectionPoint[]>();
   for (const pid of productIds) {
@@ -111,7 +153,7 @@ async function loadTemplateData(db: ReturnType<typeof useSQLiteContext>, inspect
 
   const resultRows = await db.getAllAsync<{
     product_id: string; point_key: string; type: string; value: string | null;
-    passed: number; note: string | null; photo_uris: string;
+    passed: number; note: string | null; photo_uris: string; sample_size: string | null;
   }>('SELECT * FROM inspection_results WHERE inspection_id = ?', [inspectionId]);
 
   const existingResults = new Map<string, ResultEntry>();
@@ -121,6 +163,7 @@ async function loadTemplateData(db: ReturnType<typeof useSQLiteContext>, inspect
       passed: r.passed === 1,
       value: r.value ?? undefined,
       note: r.note ?? undefined,
+      sampleSize: r.sample_size ?? undefined,
       photoUris: JSON.parse(r.photo_uris || '[]'),
     });
   }
@@ -136,8 +179,10 @@ async function loadTemplateData(db: ReturnType<typeof useSQLiteContext>, inspect
     },
     products,
     columns,
+    globalInspectionPoints,
+    groups,
     pointsByProduct,
-    ipConfigMap,
+    ipConfigSet,
     existingResults,
   };
 }
@@ -146,17 +191,18 @@ export default function TemplateScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const theme = useTheme();
   const db = useSQLiteContext();
-  const { upsertResult } = useInspections();
+  const { upsertResult, deleteResult } = useInspections();
 
   const [loading, setLoading] = useState(true);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [sections, setSections] = useState<Section[]>([]);
   const [totalItems, setTotalItems] = useState(0);
   const [filledCount, setFilledCount] = useState(0);
+  const [collapsedProducts, setCollapsedProducts] = useState<Set<string>>(new Set());
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
-  // Global photo counter for cross-referencing in PDF
   const photoCounterRef = useRef(1);
-  const photoCountersMap = useRef<Map<string, number>>(new Map()); // `productId:pointKey` → first photo number
+  const photoCountersMap = useRef<Map<string, number>>(new Map());
 
   const resultsRef = useRef<Map<string, ResultEntry>>(new Map());
   const saveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -174,23 +220,37 @@ export default function TemplateScreen() {
       if (!data) return;
 
       setInspection(data.inspection);
-
-      // Pre-populate results ref
       resultsRef.current = new Map(data.existingResults);
 
-      // Build sections
       const built: Section[] = [];
       let photoNum = 1;
       let total = 0;
+      const hasNamedGroups = data.groups.length > 0;
 
       for (const product of data.products) {
         const points = data.pointsByProduct.get(product.id) ?? [];
         const items: SectionItem[] = [];
 
+        // Group column_configs by group_name
+        const groupedCols = new Map<string | null, ColumnConfig[]>();
         for (const col of data.columns) {
-          const pointKey = `attr:${col.key}`;
+          const g = col.group ?? null;
+          if (!groupedCols.has(g)) groupedCols.set(g, []);
+          groupedCols.get(g)!.push(col);
+        }
+
+        // Group global_inspection_points by group_name
+        const groupedGips = new Map<string | null, GlobalInspectionPoint[]>();
+        for (const gip of data.globalInspectionPoints) {
+          const g = gip.group ?? null;
+          if (!groupedGips.has(g)) groupedGips.set(g, []);
+          groupedGips.get(g)!.push(gip);
+        }
+
+        function addAttrItem(col: ColumnConfig, groupKey: string, itemType: 'attribute' | 'global_inspection_point' = 'attribute') {
+          const pointKey = itemType === 'global_inspection_point' ? `gip:${col.key}` : `attr:${col.key}`;
           const mapKey = `${product.id}:${pointKey}`;
-          const existing = data.existingResults.get(mapKey);
+          const existing = data!.existingResults.get(mapKey);
           const photoUris = existing?.photoUris ?? [];
           if (photoUris.length > 0) {
             photoCountersMap.current.set(mapKey, photoNum);
@@ -201,15 +261,82 @@ export default function TemplateScreen() {
             key: mapKey,
             columnKey: col.key,
             label: col.label,
-            referenceValue: product.attributes[col.key],
+            referenceValue: itemType === 'attribute' ? product.attributes[col.key] : undefined,
             isNumeric: col.isNumeric,
             tolerance: col.tolerance,
             productId: product.id,
             pointKey,
+            severity: col.severity,
+            group: col.group,
+            instructions: col.instructions,
+            groupKey,
+            itemType,
           });
           total++;
         }
 
+        // Emit named groups in sort order — merge column_configs and gips
+        for (const group of data.groups) {
+          const cols = groupedCols.get(group.name) ?? [];
+          const gips = groupedGips.get(group.name) ?? [];
+          if (cols.length === 0 && gips.length === 0) continue;
+          const gk = `${product.id}::${group.name}`;
+          items.push({
+            kind: 'group-header',
+            key: `${product.id}:gh:${group.name}`,
+            label: group.name,
+            productId: product.id,
+            pointKey: `gh:${group.name}`,
+            groupKey: gk,
+          });
+          for (const col of cols) addAttrItem(col, gk, 'attribute');
+          for (const gip of gips) addAttrItem(gip, gk, 'global_inspection_point');
+        }
+
+        // Emit ungrouped column_configs
+        const ungrouped = groupedCols.get(null) ?? [];
+        if (ungrouped.length > 0) {
+          const ugk = `${product.id}::ungrouped`;
+          if (hasNamedGroups) {
+            items.push({
+              kind: 'group-header',
+              key: `${product.id}:gh:other`,
+              label: 'Other',
+              productId: product.id,
+              pointKey: 'gh:other',
+              groupKey: ugk,
+            });
+          }
+          for (const col of ungrouped) addAttrItem(col, hasNamedGroups ? ugk : `${product.id}::all`, 'attribute');
+        }
+
+        // Emit ungrouped global inspection points under their own sub-header
+        const ungroupedGips = groupedGips.get(null) ?? [];
+        if (ungroupedGips.length > 0) {
+          const gipGroupKey = `${product.id}::global_inspection_points`;
+          items.push({
+            kind: 'group-header',
+            key: `${product.id}:gh:global_inspection_points`,
+            label: 'Global Inspection Points',
+            productId: product.id,
+            pointKey: 'gh:global_inspection_points',
+            groupKey: gipGroupKey,
+          });
+          for (const gip of ungroupedGips) addAttrItem(gip, gipGroupKey, 'global_inspection_point');
+        }
+
+        // Inspection points — with collapsible header
+        const ipGroupKey = `${product.id}::inspection_points`;
+        if (points.length > 0) {
+          items.push({
+            kind: 'group-header',
+            key: `${product.id}:gh:inspection_points`,
+            label: 'Inspection Points',
+            productId: product.id,
+            pointKey: 'gh:inspection_points',
+            groupKey: ipGroupKey,
+          });
+        }
         for (const pip of points) {
           const pointKey = `ip:${pip.pointIndex}`;
           const mapKey = `${product.id}:${pointKey}`;
@@ -219,15 +346,14 @@ export default function TemplateScreen() {
             photoCountersMap.current.set(mapKey, photoNum);
             photoNum += photoUris.length;
           }
-          const severity = data.ipConfigMap.get(pip.pointText) ?? ('minor' as Severity);
           items.push({
             kind: 'point',
             key: mapKey,
             text: pip.pointText,
-            severity,
             productId: product.id,
             pointKey,
             photoNumber: photoCountersMap.current.get(mapKey) ?? photoNum,
+            groupKey: ipGroupKey,
           });
           total++;
         }
@@ -246,17 +372,35 @@ export default function TemplateScreen() {
 
   function getEntry(productId: string, pointKey: string): ResultEntry {
     return resultsRef.current.get(`${productId}:${pointKey}`) ?? {
-      passed: false,
+      passed: null,
       photoUris: [],
     };
   }
 
+  function resolveType(pointKey: string): 'attribute' | 'inspection_point' | 'global_inspection_point' {
+    if (pointKey.startsWith('attr:')) return 'attribute';
+    if (pointKey.startsWith('gip:')) return 'global_inspection_point';
+    return 'inspection_point';
+  }
+
   function scheduleSave(productId: string, pointKey: string, entry: ResultEntry, immediate = false) {
     const mapKey = `${productId}:${pointKey}`;
-    resultsRef.current.set(mapKey, entry);
 
     const existing = saveTimers.current.get(mapKey);
     if (existing) clearTimeout(existing);
+
+    const isEmpty = entry.passed === null && !entry.value && !entry.note && !entry.sampleSize && entry.photoUris.length === 0;
+    if (isEmpty) {
+      resultsRef.current.delete(mapKey);
+      const timer = setTimeout(async () => {
+        await deleteResult(id, productId, pointKey);
+        setFilledCount(resultsRef.current.size);
+      }, immediate ? 0 : 400);
+      saveTimers.current.set(mapKey, timer);
+      return;
+    }
+
+    resultsRef.current.set(mapKey, entry);
 
     const delay = immediate ? 0 : 400;
     const timer = setTimeout(async () => {
@@ -264,10 +408,11 @@ export default function TemplateScreen() {
         inspectionId: id,
         productId,
         pointKey,
-        type: pointKey.startsWith('attr:') ? 'attribute' : 'inspection_point',
+        type: resolveType(pointKey),
         value: entry.value,
-        passed: entry.passed,
+        passed: entry.passed ?? false,
         note: entry.note,
+        sampleSize: entry.sampleSize,
         photoUris: entry.photoUris,
       });
       setFilledCount(resultsRef.current.size);
@@ -292,19 +437,67 @@ export default function TemplateScreen() {
     forceUpdate((n) => n + 1);
   }
 
+  function toggleProduct(productId: string) {
+    setCollapsedProducts((prev) => {
+      const n = new Set(prev);
+      n.has(productId) ? n.delete(productId) : n.add(productId);
+      return n;
+    });
+  }
+
+  function toggleGroup(groupKey: string) {
+    setCollapsedGroups((prev) => {
+      const n = new Set(prev);
+      n.has(groupKey) ? n.delete(groupKey) : n.add(groupKey);
+      return n;
+    });
+  }
+
   const renderItem = useCallback(({ item }: { item: SectionItem }) => {
+    if (collapsedProducts.has(item.productId)) return null;
+
+    if (item.kind === 'group-header') {
+      const isCollapsed = collapsedGroups.has(item.groupKey);
+      return (
+        <Pressable
+          style={[styles.groupSubHeader, { backgroundColor: theme.backgroundElement }]}
+          onPress={() => toggleGroup(item.groupKey)}>
+          <ThemedText type="small" themeColor="textSecondary" style={styles.groupSubTitle}>
+            {item.label}
+          </ThemedText>
+          <ThemedText type="small" themeColor="textSecondary" style={styles.groupChevron}>
+            {isCollapsed ? '▶' : '▼'}
+          </ThemedText>
+        </Pressable>
+      );
+    }
+
+    if (collapsedGroups.has(item.groupKey)) return null;
+
     const entry = getEntry(item.productId, item.pointKey);
 
     if (item.kind === 'attribute') {
       return (
         <AttributeRow
-          column={{ key: item.columnKey, label: item.label, visible: true, isNumeric: item.isNumeric, tolerance: item.tolerance }}
+          column={{ key: item.columnKey, label: item.label, visible: true, isNumeric: item.isNumeric, tolerance: item.tolerance, severity: item.severity, sortOrder: 0 }}
           referenceValue={item.referenceValue}
           initialValue={entry.value ?? ''}
-          initialPassed={entry.passed}
+          initialPassed={entry.passed ?? null}
+          initialNote={entry.note ?? ''}
+          initialSampleSize={entry.sampleSize ?? ''}
           photoUris={entry.photoUris}
+          instructions={item.instructions}
           onChangeValue={(value, passed) => {
             scheduleSave(item.productId, item.pointKey, { ...entry, value, passed });
+          }}
+          onToggle={(passed) => {
+            scheduleSave(item.productId, item.pointKey, { ...entry, passed }, true);
+          }}
+          onNoteChange={(note) => {
+            scheduleSave(item.productId, item.pointKey, { ...entry, note });
+          }}
+          onSampleSizeChange={(sampleSize) => {
+            scheduleSave(item.productId, item.pointKey, { ...entry, sampleSize });
           }}
           onAddPhoto={() => handleAddPhoto(item.productId, item.pointKey)}
           onRemovePhoto={(uri) => handleRemovePhoto(item.productId, item.pointKey, uri)}
@@ -315,10 +508,10 @@ export default function TemplateScreen() {
     return (
       <InspectionPointRow
         text={item.text}
-        severity={item.severity}
         photoNumber={item.photoNumber}
         initialPassed={entry.passed ?? null}
         initialNote={entry.note ?? ''}
+        initialSampleSize={entry.sampleSize ?? ''}
         photoUris={entry.photoUris}
         onToggle={(passed) => {
           scheduleSave(item.productId, item.pointKey, { ...entry, passed }, true);
@@ -326,11 +519,14 @@ export default function TemplateScreen() {
         onNoteChange={(note) => {
           scheduleSave(item.productId, item.pointKey, { ...entry, note });
         }}
+        onSampleSizeChange={(sampleSize) => {
+          scheduleSave(item.productId, item.pointKey, { ...entry, sampleSize });
+        }}
         onAddPhoto={() => handleAddPhoto(item.productId, item.pointKey)}
         onRemovePhoto={(uri) => handleRemovePhoto(item.productId, item.pointKey, uri)}
       />
     );
-  }, []);
+  }, [theme, collapsedProducts, collapsedGroups]);
 
   if (loading) {
     return (
@@ -375,13 +571,21 @@ export default function TemplateScreen() {
         renderItem={renderItem}
         stickySectionHeadersEnabled
         removeClippedSubviews
-        renderSectionHeader={({ section }) => (
-          <View style={[styles.sectionHeader, { backgroundColor: theme.background }]}>
-            <ThemedText type="small" style={styles.sectionTitle}>
-              {section.title}
-            </ThemedText>
-          </View>
-        )}
+        renderSectionHeader={({ section }) => {
+          const isCollapsed = collapsedProducts.has(section.productId);
+          return (
+            <Pressable
+              style={[styles.sectionHeader, { backgroundColor: theme.background, borderTopColor: theme.backgroundElement }]}
+              onPress={() => toggleProduct(section.productId)}>
+              <ThemedText style={styles.sectionTitle}>
+                {section.title}
+              </ThemedText>
+              <ThemedText style={styles.sectionChevron}>
+                {isCollapsed ? '▶' : '▼'}
+              </ThemedText>
+            </Pressable>
+          );
+        }}
         contentContainerStyle={{ paddingBottom: BottomTabInset + Spacing.four }}
       />
     </ThemedView>
@@ -409,14 +613,41 @@ const styles = StyleSheet.create({
   },
   reviewBtnText: { color: '#3c87f7', fontWeight: '700', fontSize: 15 },
   sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.one + 2,
+    paddingVertical: Spacing.two,
+    borderTopWidth: 3,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#ddd',
   },
   sectionTitle: {
     fontWeight: '700',
+    fontSize: 18,
+    flex: 1,
+  },
+  sectionChevron: {
+    fontSize: 14,
+    color: '#888',
+    marginLeft: Spacing.two,
+  },
+  groupSubHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.three,
+    paddingVertical: 5,
+  },
+  groupSubTitle: {
+    fontWeight: '600',
+    letterSpacing: 0.3,
+    fontSize: 11,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    flex: 1,
+  },
+  groupChevron: {
+    fontSize: 11,
+    color: '#888',
   },
 });
