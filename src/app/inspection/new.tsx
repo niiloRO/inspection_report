@@ -148,7 +148,9 @@ export default function NewInspectionScreen() {
             <ThemedText style={styles.backBtn}>← Back</ThemedText>
           </Pressable>
           <ThemedText type="subtitle">New Inspection</ThemedText>
-          <View style={{ width: 60 }} />
+          <Pressable onPress={() => router.replace('/(tabs)/' as any)} hitSlop={12}>
+            <ThemedText style={styles.homeBtn}>⌂</ThemedText>
+          </Pressable>
         </View>
         <View style={styles.empty}>
           <ThemedText themeColor="textSecondary" style={styles.emptyText}>
@@ -171,7 +173,9 @@ export default function NewInspectionScreen() {
           <ThemedText style={styles.backBtn}>← Back</ThemedText>
         </Pressable>
         <ThemedText type="subtitle">New Inspection</ThemedText>
-        <View style={{ width: 60 }} />
+        <Pressable onPress={() => router.replace('/(tabs)/' as any)} hitSlop={12}>
+          <ThemedText style={styles.homeBtn}>⌂</ThemedText>
+        </Pressable>
       </View>
 
       <TextInput
@@ -324,6 +328,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   backBtn: { color: '#3c87f7', fontSize: 15 },
+  homeBtn: { color: '#3c87f7', fontSize: 20, width: 48, textAlign: 'right' },
   searchBar: {
     margin: Spacing.three,
     borderRadius: 10,

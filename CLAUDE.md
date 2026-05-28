@@ -74,6 +74,7 @@ src/
 - Tabs live in `(tabs)/` group — NativeTabs trigger names must match filenames: `"index"` and `"settings"`
 - Non-tab navigation: always `router.push('/inspection/new')` or `router.push({ pathname: '/inspection/[id]/template', params: { id } })`
 - When navigating into tabs from outside: use `/(tabs)/` paths with `as any` cast (typed routes not yet aware of group)
+- **Home button (⌂)** is present on every non-tab screen header — navigates via `router.replace('/(tabs)/' as any)`; always add one when creating new inspection screens
 
 ---
 
@@ -161,9 +162,9 @@ Handled by `src/services/settings-export.ts`. Uses SheetJS to read/write a 3-she
 
 ## Inspection Flow
 
-1. `new.tsx` — select products, enter optional global fields (supplier, location, invoice NO) + per-product units/batch/production%/packing% → `createInspection()` → push to `template`
-2. `template.tsx` — `SectionList` with per-product sections (collapsible via header chevron); attributes sub-grouped by named group (mixed with global inspection points assigned to that group), then a "Global Inspection Points" sub-section for ungrouped GIPs, then an "Inspection Points" sub-section; all sub-headers collapsible; auto-saves every change via `upsertResult()` with 400ms debounce on text fields, immediate on toggles; deselecting pass/fail calls `deleteResult()` to restore N/A state
-3. `review.tsx` — summary + failures sorted by severity (attribute + GIP failures by severity, inspection points sorted last); "Complete" → `completeInspection()` → push to `report`
+1. `new.tsx` — select products, enter optional global fields (supplier, location, invoice NO) + per-product units/batch/production%/packing% → `createInspection()` → `router.replace` to `template`
+2. `template.tsx` — `SectionList` wrapped in `KeyboardAvoidingView`; per-product sections (collapsible via header chevron); attributes sub-grouped by named group (mixed with GIPs), then ungrouped "Global Inspection Points" sub-section, then "Inspection Points" sub-section; all sub-headers collapsible; auto-saves via `upsertResult()` with 400ms debounce on text, immediate on toggles; `flushPendingSaves()` called before Back/Home/Review navigation; deselecting pass/fail calls `deleteResult()` to restore N/A
+3. `review.tsx` — summary + failures sorted by severity (attribute + GIP failures by severity, inspection points sorted last); "Complete" → `completeInspection()` → `router.replace` to `report`
 4. `report.tsx` — calls `generateProductReport()` per product; photos embedded as base64 in HTML; share via `expo-sharing`; "↺ Regenerate PDF" button available once a PDF has been generated
 
 ---
@@ -240,7 +241,9 @@ Permanent inspection points that apply to **every product** in every inspection.
 
 ## Sample Size
 
-- A free-text "Sample size" input appears on every result row (attributes, global inspection points, inspection points) in the template
+- A "Sample size" input (numeric keyboard, always labeled) appears on every result row in the template
+- **Pre-populated** from the product's `units_inspected` value entered in the New Inspection screen — the label stays visible so it's never confused with an attribute input
+- The pre-populated default is only written to DB when the user changes something else on that row; leaving a row entirely untouched preserves N/A (see Gotcha #12)
 - Stored as `inspection_results.sample_size` (TEXT, nullable)
 - Displayed in the PDF as a "Sample Size" column between Attribute and Reference (attribute table) or between Inspection Point and Result (inspection points table)
 
@@ -266,7 +269,8 @@ Permanent inspection points that apply to **every product** in every inspection.
 - Detailed failures list: attribute + GIP failures grouped by severity, then inspection point failures flat
 - **Product Attribute Results** table (7 columns): Attribute | Sample Size | Reference | Measured | Result | Note | Photo — includes both product info columns and global inspection points (GIPs grouped by group_name; ungrouped GIPs under "Global Inspection Points" sub-header)
 - **Inspection Points** table (5 columns): Inspection Point | Sample Size | Result | Note | Photo
-- Photos embedded as `data:image/jpeg;base64,...` — referenced inline as "Photo N"
+- Photos embedded as `data:image/jpeg;base64,...` — printed **4-per-page in a 2×2 CSS grid** (`<div class="photo-page">`), each page forced with `page-break-after: always`
+- "Photo N" references in all tables are `<a href="#photo-N">` anchor links; each photo block has `id="photo-N"` — PDF viewers jump to the correct page
 - PDF saved to `Paths.document.uri + 'reports/{productId}_{inspectionId}.pdf'` — destination deleted before copy to allow regeneration
 - "↺ Regenerate PDF" secondary button appears once a PDF exists; tapping it clears the cached URI and re-generates
 - Share via `Sharing.shareAsync(pdfUri, { mimeType: 'application/pdf' })`
@@ -322,5 +326,8 @@ git push origin feature/pdf-improvements
 7. React Compiler is on — wrapping in `useCallback` without profiling evidence will conflict with compiler optimizations.
 8. `column_configs` sort order is set during Excel import; it is preserved on re-import (upsert updates `sort_order`). Do not use `ORDER BY label` anywhere — always `ORDER BY sort_order`.
 9. When a pass/fail toggle is deselected (returns to null), call `deleteResult()` rather than upserting with `passed=null` — the absence of a DB row is the N/A signal.
-10. Inspection point severity is stored in `inspection_point_configs` (DB) but is intentionally not shown anywhere in the UI or PDF — do not re-introduce severity display for inspection points.
+10. Inspection point severity is intentionally not shown anywhere in the UI or PDF — do not re-introduce severity display for inspection points.
 11. `point_key` prefixes are load-bearing: `attr:` for product info columns, `gip:` for global inspection points, `ip:` for inspection points. Never mix them up or strip prefixes when storing.
+12. `scheduleSave()` in `template.tsx` treats a sample size equal to the per-product default (from `units_inspected`) as non-input for the isEmpty check — so deselecting pass/fail on a row with only the default sample size correctly restores N/A. Only an *explicitly modified* sample size (different from the default) keeps the row filled.
+13. Before navigating away from `template.tsx` (Back, Home, Review), always call `await flushPendingSaves()` — it cancels all debounce timers and immediately writes pending results to DB. Skipping this can silently drop the last 400ms of edits.
+14. Android keyboard: `softwareKeyboardLayoutMode: "pan"` in `app.json` makes the view pan upward when the keyboard opens. The template also uses `KeyboardAvoidingView` + `keyboardShouldPersistTaps="handled"` + `automaticallyAdjustKeyboardInsets` on the `SectionList`.

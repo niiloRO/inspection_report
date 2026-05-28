@@ -2,6 +2,8 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   SectionList,
   StyleSheet,
@@ -168,6 +170,14 @@ async function loadTemplateData(db: ReturnType<typeof useSQLiteContext>, inspect
     });
   }
 
+  const unitsRows = await db.getAllAsync<{ product_id: string; units_inspected: number }>(
+    'SELECT product_id, units_inspected FROM inspection_products WHERE inspection_id = ?',
+    [inspectionId],
+  );
+  const defaultSampleSizes = new Map(
+    unitsRows.map((r) => [r.product_id, r.units_inspected > 0 ? String(r.units_inspected) : '']),
+  );
+
   return {
     inspection: {
       id: inspRow.id,
@@ -184,6 +194,7 @@ async function loadTemplateData(db: ReturnType<typeof useSQLiteContext>, inspect
     pointsByProduct,
     ipConfigSet,
     existingResults,
+    defaultSampleSizes,
   };
 }
 
@@ -206,6 +217,7 @@ export default function TemplateScreen() {
 
   const resultsRef = useRef<Map<string, ResultEntry>>(new Map());
   const saveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const defaultSampleSizesRef = useRef<Map<string, string>>(new Map());
 
   const [, forceUpdate] = useState(0);
 
@@ -221,6 +233,7 @@ export default function TemplateScreen() {
 
       setInspection(data.inspection);
       resultsRef.current = new Map(data.existingResults);
+      defaultSampleSizesRef.current = data.defaultSampleSizes;
 
       const built: Section[] = [];
       let photoNum = 1;
@@ -374,6 +387,7 @@ export default function TemplateScreen() {
     return resultsRef.current.get(`${productId}:${pointKey}`) ?? {
       passed: null,
       photoUris: [],
+      sampleSize: defaultSampleSizesRef.current.get(productId),
     };
   }
 
@@ -383,13 +397,49 @@ export default function TemplateScreen() {
     return 'inspection_point';
   }
 
+  async function flushPendingSaves() {
+    const pendingKeys = Array.from(saveTimers.current.keys());
+    for (const timerId of saveTimers.current.values()) clearTimeout(timerId);
+    saveTimers.current.clear();
+    for (const mapKey of pendingKeys) {
+      let splitIdx = -1;
+      for (const prefix of [':attr:', ':gip:', ':ip:']) {
+        const idx = mapKey.indexOf(prefix);
+        if (idx >= 0 && (splitIdx === -1 || idx < splitIdx)) splitIdx = idx;
+      }
+      if (splitIdx === -1) continue;
+      const productId = mapKey.slice(0, splitIdx);
+      const pointKey = mapKey.slice(splitIdx + 1);
+      const entry = resultsRef.current.get(mapKey);
+      if (entry) {
+        await upsertResult({
+          inspectionId: id,
+          productId,
+          pointKey,
+          type: resolveType(pointKey),
+          value: entry.value,
+          passed: entry.passed ?? false,
+          note: entry.note,
+          sampleSize: entry.sampleSize,
+          photoUris: entry.photoUris,
+        });
+      } else {
+        await deleteResult(id, productId, pointKey);
+      }
+    }
+    if (pendingKeys.length > 0) setFilledCount(resultsRef.current.size);
+  }
+
   function scheduleSave(productId: string, pointKey: string, entry: ResultEntry, immediate = false) {
     const mapKey = `${productId}:${pointKey}`;
 
     const existing = saveTimers.current.get(mapKey);
     if (existing) clearTimeout(existing);
 
-    const isEmpty = entry.passed === null && !entry.value && !entry.note && !entry.sampleSize && entry.photoUris.length === 0;
+    // A sample size that equals the default doesn't count as user input for N/A detection
+    const defaultSS = defaultSampleSizesRef.current.get(productId);
+    const hasUserSampleSize = !!entry.sampleSize && entry.sampleSize !== defaultSS;
+    const isEmpty = entry.passed === null && !entry.value && !entry.note && !hasUserSampleSize && entry.photoUris.length === 0;
     if (isEmpty) {
       resultsRef.current.delete(mapKey);
       const timer = setTimeout(async () => {
@@ -546,8 +596,9 @@ export default function TemplateScreen() {
 
   return (
     <ThemedView style={styles.container}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={[styles.header, { borderBottomColor: theme.backgroundElement }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12}>
+        <Pressable onPress={async () => { await flushPendingSaves(); router.back(); }} hitSlop={12}>
           <ThemedText style={styles.backBtn}>← Back</ThemedText>
         </Pressable>
         <View style={styles.headerCenter}>
@@ -558,11 +609,16 @@ export default function TemplateScreen() {
             {filledCount}/{totalItems} filled
           </ThemedText>
         </View>
-        <Pressable
-          onPress={() => router.push({ pathname: '/inspection/[id]/review', params: { id } })}
-          style={styles.reviewBtn}>
-          <ThemedText style={styles.reviewBtnText}>Review →</ThemedText>
-        </Pressable>
+        <View style={styles.headerRight}>
+          <Pressable
+            onPress={async () => { await flushPendingSaves(); router.push({ pathname: '/inspection/[id]/review', params: { id } }); }}
+            style={styles.reviewBtn}>
+            <ThemedText style={styles.reviewBtnText}>Review →</ThemedText>
+          </Pressable>
+          <Pressable onPress={async () => { await flushPendingSaves(); router.replace('/(tabs)/' as any); }} hitSlop={12}>
+            <ThemedText style={styles.homeBtnText}>⌂</ThemedText>
+          </Pressable>
+        </View>
       </View>
 
       <SectionList
@@ -571,6 +627,8 @@ export default function TemplateScreen() {
         renderItem={renderItem}
         stickySectionHeadersEnabled
         removeClippedSubviews
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
         renderSectionHeader={({ section }) => {
           const isCollapsed = collapsedProducts.has(section.productId);
           return (
@@ -588,6 +646,7 @@ export default function TemplateScreen() {
         }}
         contentContainerStyle={{ paddingBottom: BottomTabInset + Spacing.four }}
       />
+      </KeyboardAvoidingView>
     </ThemedView>
   );
 }
@@ -607,11 +666,17 @@ const styles = StyleSheet.create({
   backBtn: { color: '#3c87f7', fontSize: 15 },
   headerCenter: { alignItems: 'center' },
   headerTitle: { fontWeight: '700' },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   reviewBtn: {
     paddingHorizontal: Spacing.two,
     paddingVertical: 4,
   },
   reviewBtnText: { color: '#3c87f7', fontWeight: '700', fontSize: 15 },
+  homeBtnText: { color: '#3c87f7', fontSize: 20 },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',

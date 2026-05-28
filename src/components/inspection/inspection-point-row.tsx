@@ -75,14 +75,18 @@ export function InspectionPointRow({
         </View>
       </View>
 
-      <TextInput
-        style={[styles.sampleSizeInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
-        value={sampleSize}
-        onChangeText={(t) => { setSampleSize(t); onSampleSizeChange(t); }}
-        placeholder="Sample size..."
-        placeholderTextColor={theme.textSecondary}
-        returnKeyType="done"
-      />
+      <View style={styles.sampleSizeRow}>
+        <ThemedText type="small" themeColor="textSecondary" style={styles.sampleSizeLabel}>Sample size</ThemedText>
+        <TextInput
+          style={[styles.sampleSizeInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
+          value={sampleSize}
+          onChangeText={(t) => { setSampleSize(t); onSampleSizeChange(t); }}
+          placeholder="—"
+          placeholderTextColor={theme.textSecondary}
+          returnKeyType="done"
+          keyboardType="number-pad"
+        />
+      </View>
 
       <View style={styles.actions}>
         <View style={styles.toggleRow}>
@@ -210,12 +214,22 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
   },
+  sampleSizeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    marginBottom: Spacing.one,
+  },
+  sampleSizeLabel: {
+    fontSize: 11,
+    minWidth: 68,
+  },
   sampleSizeInput: {
+    flex: 1,
     borderRadius: 6,
     paddingHorizontal: Spacing.two,
     paddingVertical: 4,
     fontSize: 12,
-    marginBottom: Spacing.one,
   },
   noteInput: {
     marginTop: Spacing.two,

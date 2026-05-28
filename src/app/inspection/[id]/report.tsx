@@ -239,7 +239,9 @@ export default function ReportScreen() {
           <ThemedText style={styles.backBtn}>← Back</ThemedText>
         </Pressable>
         <ThemedText type="subtitle">Report</ThemedText>
-        <View style={{ width: 60 }} />
+        <Pressable onPress={() => router.replace('/(tabs)/' as any)} hitSlop={12}>
+          <ThemedText style={styles.homeBtn}>⌂</ThemedText>
+        </Pressable>
       </View>
 
       {reports.length > 1 && (
@@ -351,6 +353,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   backBtn: { color: '#3c87f7', fontSize: 15, width: 60 },
+  homeBtn: { color: '#3c87f7', fontSize: 20, width: 48, textAlign: 'right' },
   productTabsRow: {
     borderBottomWidth: StyleSheet.hairlineWidth,
   },

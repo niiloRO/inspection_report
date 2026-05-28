@@ -162,7 +162,9 @@ export default function ReviewScreen() {
           <ThemedText style={styles.backBtn}>← Edit</ThemedText>
         </Pressable>
         <ThemedText type="subtitle">Review</ThemedText>
-        <View style={{ width: 60 }} />
+        <Pressable onPress={() => router.replace('/(tabs)/' as any)} hitSlop={12}>
+          <ThemedText style={styles.homeBtn}>⌂</ThemedText>
+        </Pressable>
       </View>
 
       <FlatList
@@ -248,6 +250,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   backBtn: { color: '#3c87f7', fontSize: 15, width: 60 },
+  homeBtn: { color: '#3c87f7', fontSize: 20, width: 48, textAlign: 'right' },
   summary: {
     flexDirection: 'row',
     gap: Spacing.two,

@@ -70,13 +70,13 @@ export async function generateProductReport(options: ReportOptions): Promise<str
   // Assign sequential photo numbers across all results
   let photoCounter = 1;
   const photoNumberMap = new Map<string, number>();
-  const allPhotos: { label: string; uri: string; b64?: string }[] = [];
+  const allPhotos: { label: string; num: number; uri: string; b64?: string }[] = [];
 
   for (const r of productResults) {
     if (r.photoUris.length > 0) {
       photoNumberMap.set(r.pointKey, photoCounter);
       for (const uri of r.photoUris) {
-        allPhotos.push({ label: `Photo ${photoCounter}`, uri });
+        allPhotos.push({ label: `Photo ${photoCounter}`, num: photoCounter, uri });
         photoCounter++;
       }
     }
@@ -173,7 +173,7 @@ export async function generateProductReport(options: ReportOptions): Promise<str
       failedSummaryRows += `<tr>
         <td>${escapeHtml(label)}</td>
         <td>${r.note ? escapeHtml(r.note) : '—'}</td>
-        <td>${photoNum ? `Photo ${photoNum}` : '—'}</td>
+        <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
       </tr>`;
     }
   }
@@ -188,7 +188,7 @@ export async function generateProductReport(options: ReportOptions): Promise<str
       failedSummaryRows += `<tr>
         <td>${escapeHtml(label)}</td>
         <td>${r.note ? escapeHtml(r.note) : '—'}</td>
-        <td>${photoNum ? `Photo ${photoNum}` : '—'}</td>
+        <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
       </tr>`;
     }
   }
@@ -224,7 +224,7 @@ export async function generateProductReport(options: ReportOptions): Promise<str
       <td>${st !== 'na' ? escapeHtml(String(measuredVal)) : '—'}</td>
       <td>${statusBadge(st)}</td>
       <td>${noteVal}</td>
-      <td>${photoNum ? `Photo ${photoNum}` : '—'}</td>
+      <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
     </tr>`;
   }
 
@@ -243,7 +243,7 @@ export async function generateProductReport(options: ReportOptions): Promise<str
       <td>${st !== 'na' ? escapeHtml(String(measuredVal)) : '—'}</td>
       <td>${statusBadge(st)}</td>
       <td>${noteVal}</td>
-      <td>${photoNum ? `Photo ${photoNum}` : '—'}</td>
+      <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
     </tr>`;
   }
 
@@ -290,19 +290,25 @@ export async function generateProductReport(options: ReportOptions): Promise<str
       <td>${sampleSizeVal}</td>
       <td>${statusBadge(st)}</td>
       <td>${noteVal}</td>
-      <td>${photoNum ? `Photo ${photoNum}` : '—'}</td>
+      <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
     </tr>`;
   }
 
-  // --- Photos section ---
+  // --- Photos section (4 per page, 2×2 grid) ---
+  const readyPhotos = allPhotos.filter((p) => p.b64);
   let photosHtml = '';
-  for (const photo of allPhotos) {
-    if (photo.b64) {
-      photosHtml += `<div class="photo-block">
-        <p class="photo-label">${escapeHtml(photo.label)}</p>
-        <img src="data:image/jpeg;base64,${photo.b64}" style="max-width:100%;max-height:500px;" />
-      </div>`;
+  if (readyPhotos.length > 0) {
+    const pages: string[] = [];
+    for (let i = 0; i < readyPhotos.length; i += 4) {
+      const chunk = readyPhotos.slice(i, i + 4);
+      const blocks = chunk.map((photo) => `
+        <div class="photo-block" id="photo-${photo.num}">
+          <p class="photo-label">${escapeHtml(photo.label)}</p>
+          <img src="data:image/jpeg;base64,${photo.b64}" />
+        </div>`).join('');
+      pages.push(`<div class="photo-page">${blocks}</div>`);
     }
+    photosHtml = pages.join('');
   }
 
   const supplierLine = inspection.supplier
@@ -335,8 +341,10 @@ export async function generateProductReport(options: ReportOptions): Promise<str
   table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 16px; }
   th { background: #f5f5f5; text-align: left; padding: 6px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
   td { padding: 5px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
-  .photo-block { page-break-inside: avoid; margin-bottom: 24px; }
-  .photo-label { font-weight: bold; font-size: 12px; margin-bottom: 4px; }
+  .photo-page { page-break-after: always; break-after: page; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 10px; height: 100vh; box-sizing: border-box; padding: 4px; }
+  .photo-block { display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; border: 1px solid #eee; border-radius: 4px; padding: 6px; }
+  .photo-block img { max-width: 100%; max-height: calc(50vh - 40px); object-fit: contain; }
+  .photo-label { font-weight: bold; font-size: 11px; margin-bottom: 4px; text-align: center; }
 </style>
 </head>
 <body>
