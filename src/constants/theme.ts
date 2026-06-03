@@ -65,7 +65,7 @@ export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
 export const MaxContentWidth = 800;
 
 export const SeverityColors = {
-  critical: '#c0392b',
-  major: '#e67e22',
-  minor: '#f39c12',
+  high: '#c0392b',
+  medium: '#e67e22',
+  low: '#f39c12',
 } as const;

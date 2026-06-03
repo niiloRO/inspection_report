@@ -48,6 +48,8 @@ export interface Inspection {
   supplier?: string;
   location?: string;
   invoiceNo?: string;
+  inspectorName?: string;
+  reportType?: 'normal' | 'nested';
 }
 
 export interface InspectionProduct {
@@ -69,6 +71,7 @@ export interface InspectionResult {
   passed: boolean;
   note?: string;
   photoUris: string[];
+  videoUris: string[];
   sampleSize?: string;
 }
 

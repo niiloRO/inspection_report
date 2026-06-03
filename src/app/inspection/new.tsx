@@ -70,6 +70,8 @@ export default function NewInspectionScreen() {
   const [supplier, setSupplier] = useState('');
   const [location, setLocation] = useState('');
   const [invoiceNo, setInvoiceNo] = useState('');
+  const [inspectorName, setInspectorName] = useState('');
+  const [reportType, setReportType] = useState<'normal' | 'nested'>('normal');
   const [starting, setStarting] = useState(false);
 
   const filtered = search(query);
@@ -82,6 +84,7 @@ export default function NewInspectionScreen() {
       } else {
         next.add(id);
       }
+      if (next.size < 2) setReportType('normal');
       return next;
     });
     setProductUnits((prev) => {
@@ -132,6 +135,8 @@ export default function NewInspectionScreen() {
         supplier: supplier.trim() || undefined,
         location: location.trim() || undefined,
         invoiceNo: invoiceNo.trim() || undefined,
+        inspectorName: inspectorName.trim() || undefined,
+        reportType: selected.size >= 2 ? reportType : 'normal',
         productUnits: units,
       });
       router.replace({ pathname: '/inspection/[id]/template', params: { id } });
@@ -230,6 +235,40 @@ export default function NewInspectionScreen() {
             placeholder="Invoice NO (optional)"
             placeholderTextColor={theme.textSecondary}
           />
+          <TextInput
+            style={[styles.globalInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
+            value={inspectorName}
+            onChangeText={setInspectorName}
+            placeholder="Inspector name (optional)"
+            placeholderTextColor={theme.textSecondary}
+          />
+          {selected.size >= 2 && (
+            <View style={styles.reportTypeRow}>
+              <ThemedText type="small" themeColor="textSecondary" style={styles.reportTypeLabel}>Report type:</ThemedText>
+              <View style={styles.reportTypeToggle}>
+                <Pressable
+                  onPress={() => setReportType('normal')}
+                  style={[
+                    styles.reportTypeBtn,
+                    { backgroundColor: reportType === 'normal' ? '#3c87f7' : theme.backgroundElement },
+                  ]}>
+                  <ThemedText type="small" style={{ color: reportType === 'normal' ? '#fff' : theme.text, fontWeight: '600' }}>
+                    Normal
+                  </ThemedText>
+                </Pressable>
+                <Pressable
+                  onPress={() => setReportType('nested')}
+                  style={[
+                    styles.reportTypeBtn,
+                    { backgroundColor: reportType === 'nested' ? '#3c87f7' : theme.backgroundElement },
+                  ]}>
+                  <ThemedText type="small" style={{ color: reportType === 'nested' ? '#fff' : theme.text, fontWeight: '600' }}>
+                    Nested
+                  </ThemedText>
+                </Pressable>
+              </View>
+            </View>
+          )}
         </View>
 
         {selectedProducts.length > 0 && (
@@ -385,6 +424,24 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.one + 2,
     fontSize: 15,
     textAlign: 'center',
+  },
+  reportTypeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    marginTop: 2,
+  },
+  reportTypeLabel: { flex: 0 },
+  reportTypeToggle: {
+    flexDirection: 'row',
+    borderRadius: 8,
+    overflow: 'hidden',
+    flex: 1,
+  },
+  reportTypeBtn: {
+    flex: 1,
+    paddingVertical: Spacing.one + 2,
+    alignItems: 'center',
   },
   startBtn: {
     borderRadius: 12,

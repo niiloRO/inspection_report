@@ -13,6 +13,8 @@ interface InspectionRow {
   supplier: string | null;
   location: string | null;
   invoice_no: string | null;
+  inspector_name: string | null;
+  report_type: string;
 }
 
 interface InspectionProductRow {
@@ -33,6 +35,7 @@ interface ResultRow {
   passed: number;
   note: string | null;
   photo_uris: string;
+  video_uris: string;
   sample_size: string | null;
 }
 
@@ -59,6 +62,8 @@ function mapRow(r: InspectionRow, productIds: string[]): Inspection {
     supplier: r.supplier ?? undefined,
     location: r.location ?? undefined,
     invoiceNo: r.invoice_no ?? undefined,
+    inspectorName: r.inspector_name ?? undefined,
+    reportType: (r.report_type as 'normal' | 'nested') ?? 'normal',
   };
 }
 
@@ -73,6 +78,7 @@ function mapResultRow(r: ResultRow): InspectionResult {
     passed: r.passed === 1,
     note: r.note ?? undefined,
     photoUris: JSON.parse(r.photo_uris || '[]'),
+    videoUris: JSON.parse(r.video_uris || '[]'),
     sampleSize: r.sample_size ?? undefined,
   };
 }
@@ -136,14 +142,16 @@ export function useInspections() {
     supplier?: string;
     location?: string;
     invoiceNo?: string;
+    inspectorName?: string;
+    reportType?: 'normal' | 'nested';
     productUnits: Map<string, { unitsInspected: number; batchSize: number; productionStatus?: number; packingStatus?: number }>;
   }): Promise<string> {
     const id = generateId();
     const date = new Date().toISOString();
     await db.withTransactionAsync(async () => {
       await db.runAsync(
-        'INSERT INTO inspections (id, date, units_inspected, batch_size, status, supplier, location, invoice_no) VALUES (?, ?, 1, 1, ?, ?, ?, ?)',
-        [id, date, 'in_progress', data.supplier ?? null, data.location ?? null, data.invoiceNo ?? null],
+        'INSERT INTO inspections (id, date, units_inspected, batch_size, status, supplier, location, invoice_no, inspector_name, report_type) VALUES (?, ?, 1, 1, ?, ?, ?, ?, ?, ?)',
+        [id, date, 'in_progress', data.supplier ?? null, data.location ?? null, data.invoiceNo ?? null, data.inspectorName ?? null, data.reportType ?? 'normal'],
       );
       for (const productId of data.productIds) {
         const units = data.productUnits.get(productId) ?? { unitsInspected: 1, batchSize: 1 };
@@ -161,13 +169,14 @@ export function useInspections() {
     const id = generateId();
     await db.runAsync(
       `INSERT INTO inspection_results
-         (id, inspection_id, product_id, point_key, type, value, passed, note, photo_uris, sample_size)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (id, inspection_id, product_id, point_key, type, value, passed, note, photo_uris, video_uris, sample_size)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(inspection_id, product_id, point_key) DO UPDATE SET
          value = excluded.value,
          passed = excluded.passed,
          note = excluded.note,
          photo_uris = excluded.photo_uris,
+         video_uris = excluded.video_uris,
          sample_size = excluded.sample_size`,
       [
         id,
@@ -179,6 +188,7 @@ export function useInspections() {
         result.passed ? 1 : 0,
         result.note ?? null,
         JSON.stringify(result.photoUris),
+        JSON.stringify(result.videoUris),
         result.sampleSize ?? null,
       ],
     );

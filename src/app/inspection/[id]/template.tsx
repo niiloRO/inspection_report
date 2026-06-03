@@ -19,6 +19,7 @@ import { useSQLiteContext } from '@/db';
 import { useInspections } from '@/hooks/use-inspections';
 import { useTheme } from '@/hooks/use-theme';
 import { takePhoto } from '@/services/photo-service';
+import { recordVideo } from '@/services/video-service';
 import type { ColumnConfig, GlobalInspectionPoint, Group, Inspection, InspectionPointConfig, Product, ProductInspectionPoint, Severity } from '@/types';
 
 interface AttributeItem {
@@ -71,6 +72,7 @@ interface ResultEntry {
   note?: string;
   sampleSize?: string;
   photoUris: string[];
+  videoUris: string[];
 }
 
 async function loadTemplateData(db: ReturnType<typeof useSQLiteContext>, inspectionId: string) {
@@ -155,7 +157,7 @@ async function loadTemplateData(db: ReturnType<typeof useSQLiteContext>, inspect
 
   const resultRows = await db.getAllAsync<{
     product_id: string; point_key: string; type: string; value: string | null;
-    passed: number; note: string | null; photo_uris: string; sample_size: string | null;
+    passed: number; note: string | null; photo_uris: string; video_uris: string; sample_size: string | null;
   }>('SELECT * FROM inspection_results WHERE inspection_id = ?', [inspectionId]);
 
   const existingResults = new Map<string, ResultEntry>();
@@ -167,6 +169,7 @@ async function loadTemplateData(db: ReturnType<typeof useSQLiteContext>, inspect
       note: r.note ?? undefined,
       sampleSize: r.sample_size ?? undefined,
       photoUris: JSON.parse(r.photo_uris || '[]'),
+      videoUris: JSON.parse(r.video_uris || '[]'),
     });
   }
 
@@ -387,6 +390,7 @@ export default function TemplateScreen() {
     return resultsRef.current.get(`${productId}:${pointKey}`) ?? {
       passed: null,
       photoUris: [],
+      videoUris: [],
       sampleSize: defaultSampleSizesRef.current.get(productId),
     };
   }
@@ -422,6 +426,7 @@ export default function TemplateScreen() {
           note: entry.note,
           sampleSize: entry.sampleSize,
           photoUris: entry.photoUris,
+          videoUris: entry.videoUris,
         });
       } else {
         await deleteResult(id, productId, pointKey);
@@ -439,7 +444,7 @@ export default function TemplateScreen() {
     // A sample size that equals the default doesn't count as user input for N/A detection
     const defaultSS = defaultSampleSizesRef.current.get(productId);
     const hasUserSampleSize = !!entry.sampleSize && entry.sampleSize !== defaultSS;
-    const isEmpty = entry.passed === null && !entry.value && !entry.note && !hasUserSampleSize && entry.photoUris.length === 0;
+    const isEmpty = entry.passed === null && !entry.value && !entry.note && !hasUserSampleSize && entry.photoUris.length === 0 && entry.videoUris.length === 0;
     if (isEmpty) {
       resultsRef.current.delete(mapKey);
       const timer = setTimeout(async () => {
@@ -464,6 +469,7 @@ export default function TemplateScreen() {
         note: entry.note,
         sampleSize: entry.sampleSize,
         photoUris: entry.photoUris,
+        videoUris: entry.videoUris,
       });
       setFilledCount(resultsRef.current.size);
     }, delay);
@@ -483,6 +489,22 @@ export default function TemplateScreen() {
   function handleRemovePhoto(productId: string, pointKey: string, uri: string) {
     const entry = getEntry(productId, pointKey);
     const updated: ResultEntry = { ...entry, photoUris: entry.photoUris.filter((u) => u !== uri) };
+    scheduleSave(productId, pointKey, updated, true);
+    forceUpdate((n) => n + 1);
+  }
+
+  async function handleAddVideo(productId: string, pointKey: string) {
+    const entry = getEntry(productId, pointKey);
+    const uri = await recordVideo(id, pointKey);
+    if (!uri) return;
+    const updated: ResultEntry = { ...entry, videoUris: [...entry.videoUris, uri] };
+    scheduleSave(productId, pointKey, updated, true);
+    forceUpdate((n) => n + 1);
+  }
+
+  function handleRemoveVideo(productId: string, pointKey: string, uri: string) {
+    const entry = getEntry(productId, pointKey);
+    const updated: ResultEntry = { ...entry, videoUris: entry.videoUris.filter((u) => u !== uri) };
     scheduleSave(productId, pointKey, updated, true);
     forceUpdate((n) => n + 1);
   }
@@ -536,6 +558,7 @@ export default function TemplateScreen() {
           initialNote={entry.note ?? ''}
           initialSampleSize={entry.sampleSize ?? ''}
           photoUris={entry.photoUris}
+          videoUris={entry.videoUris}
           instructions={item.instructions}
           onChangeValue={(value, passed) => {
             scheduleSave(item.productId, item.pointKey, { ...entry, value, passed });
@@ -551,6 +574,8 @@ export default function TemplateScreen() {
           }}
           onAddPhoto={() => handleAddPhoto(item.productId, item.pointKey)}
           onRemovePhoto={(uri) => handleRemovePhoto(item.productId, item.pointKey, uri)}
+          onAddVideo={() => handleAddVideo(item.productId, item.pointKey)}
+          onRemoveVideo={(uri) => handleRemoveVideo(item.productId, item.pointKey, uri)}
         />
       );
     }
@@ -563,6 +588,7 @@ export default function TemplateScreen() {
         initialNote={entry.note ?? ''}
         initialSampleSize={entry.sampleSize ?? ''}
         photoUris={entry.photoUris}
+        videoUris={entry.videoUris}
         onToggle={(passed) => {
           scheduleSave(item.productId, item.pointKey, { ...entry, passed }, true);
         }}
@@ -574,6 +600,8 @@ export default function TemplateScreen() {
         }}
         onAddPhoto={() => handleAddPhoto(item.productId, item.pointKey)}
         onRemovePhoto={(uri) => handleRemovePhoto(item.productId, item.pointKey, uri)}
+        onAddVideo={() => handleAddVideo(item.productId, item.pointKey)}
+        onRemoveVideo={(uri) => handleRemoveVideo(item.productId, item.pointKey, uri)}
       />
     );
   }, [theme, collapsedProducts, collapsedGroups]);

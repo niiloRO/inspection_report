@@ -11,9 +11,9 @@ interface Props {
 }
 
 const LABELS: Record<Severity, string> = {
-  critical: 'Critical',
-  major: 'Major',
-  minor: 'Minor',
+  high: 'High',
+  medium: 'Medium',
+  low: 'Low',
 };
 
 export function SeverityBadge({ severity }: Props) {

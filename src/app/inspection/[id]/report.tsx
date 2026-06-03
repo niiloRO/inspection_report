@@ -1,4 +1,7 @@
+import { File, Paths } from 'expo-file-system';
 import { router, useLocalSearchParams } from 'expo-router';
+import * as Sharing from 'expo-sharing';
+import JSZip from 'jszip';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
@@ -7,14 +10,36 @@ import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, Spacing } from '@/constants/theme';
 import { useSQLiteContext } from '@/db';
 import { useTheme } from '@/hooks/use-theme';
-import { generateProductReport, sharePdf } from '@/services/pdf-generator';
+import { generateNestedReport, generateProductReport, sharePdf } from '@/services/pdf-generator';
 import type { ColumnConfig, GlobalInspectionPoint, Group, Inspection, InspectionPointConfig, InspectionResult, PointType, Product, Severity, ToleranceType } from '@/types';
 
 interface ProductReport {
   product: Product;
   pdfUri: string | null;
+  videoUris: string[];
   generating: boolean;
   error: string | null;
+}
+
+async function shareBundle(pdfUri: string, videoUris: string[]): Promise<void> {
+  const zip = new JSZip();
+
+  zip.file('report.pdf', await new File(pdfUri).bytes());
+
+  for (let i = 0; i < videoUris.length; i++) {
+    const uri = videoUris[i];
+    const ext = uri.split('.').pop()?.toLowerCase() ?? 'mp4';
+    zip.file(`video_${i + 1}.${ext}`, await new File(uri).bytes());
+  }
+
+  const zipBytes = await zip.generateAsync({ type: 'uint8array' });
+
+  const zipUri = Paths.document.uri + 'inspection_report.zip';
+  const zipFile = new File(zipUri);
+  if (zipFile.exists) zipFile.delete();
+  zipFile.write(zipBytes);
+
+  await Sharing.shareAsync(zipUri, { mimeType: 'application/zip' });
 }
 
 export default function ReportScreen() {
@@ -25,9 +50,11 @@ export default function ReportScreen() {
   const [loading, setLoading] = useState(true);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [reports, setReports] = useState<ProductReport[]>([]);
+  const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [globalInspectionPoints, setGlobalInspectionPoints] = useState<GlobalInspectionPoint[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [sharing, setSharing] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
 
   useEffect(() => {
     load();
@@ -39,6 +66,7 @@ export default function ReportScreen() {
       const inspRow = await db.getFirstAsync<{
         id: string; date: string; units_inspected: number; batch_size: number; status: string;
         supplier: string | null; location: string | null; invoice_no: string | null;
+        inspector_name: string | null; report_type: string;
       }>('SELECT * FROM inspections WHERE id = ?', [id]);
       if (!inspRow) return;
 
@@ -85,9 +113,17 @@ export default function ReportScreen() {
         supplier: inspRow.supplier ?? undefined,
         location: inspRow.location ?? undefined,
         invoiceNo: inspRow.invoice_no ?? undefined,
+        inspectorName: inspRow.inspector_name ?? undefined,
+        reportType: (inspRow.report_type as 'normal' | 'nested') ?? 'normal',
       };
       setInspection(insp);
-      setReports(products.map((p) => ({ product: p, pdfUri: null, generating: false, error: null })));
+      setAllProducts(products);
+      if (insp.reportType === 'nested') {
+        const dummy: Product = { id: '__nested__', name: 'All Products', attributes: {} };
+        setReports([{ product: dummy, pdfUri: null, videoUris: [], generating: false, error: null }]);
+      } else {
+        setReports(products.map((p) => ({ product: p, pdfUri: null, videoUris: [], generating: false, error: null })));
+      }
     } finally {
       setLoading(false);
     }
@@ -123,6 +159,74 @@ export default function ReportScreen() {
       );
       const groups: Group[] = groupRows.map((r) => ({ name: r.name, sortOrder: r.sort_order }));
 
+      const allResultRows = await db.getAllAsync<{
+        id: string; inspection_id: string; product_id: string; point_key: string; type: string;
+        value: string | null; passed: number; note: string | null; photo_uris: string;
+        video_uris: string; sample_size: string | null;
+      }>('SELECT * FROM inspection_results WHERE inspection_id = ?', [id]);
+
+      if (inspection.reportType === 'nested') {
+        // Build per-product data maps
+        const productUnitsMap = new Map<string, { unitsInspected: number; batchSize: number; productionStatus?: number; packingStatus?: number }>();
+        const productInspectionPointsMap = new Map<string, { pointIndex: number; pointText: string }[]>();
+        const ipTextMap = new Map<string, Map<string, string>>();
+
+        for (const product of allProducts) {
+          const puRow = await db.getFirstAsync<{
+            units_inspected: number; batch_size: number;
+            production_status: number | null; packing_status: number | null;
+          }>(
+            'SELECT units_inspected, batch_size, production_status, packing_status FROM inspection_products WHERE inspection_id = ? AND product_id = ?',
+            [id, product.id],
+          );
+          productUnitsMap.set(product.id, {
+            unitsInspected: puRow?.units_inspected ?? 1,
+            batchSize: puRow?.batch_size ?? 1,
+            productionStatus: puRow?.production_status ?? undefined,
+            packingStatus: puRow?.packing_status ?? undefined,
+          });
+
+          const ipRows = await db.getAllAsync<{ point_index: number; point_text: string }>(
+            'SELECT point_index, point_text FROM product_inspection_points WHERE product_id = ? ORDER BY point_index',
+            [product.id],
+          );
+          productInspectionPointsMap.set(product.id, ipRows.map((r) => ({ pointIndex: r.point_index, pointText: r.point_text })));
+          const pm = new Map<string, string>();
+          ipRows.forEach((r) => pm.set(`ip:${r.point_index}`, r.point_text));
+          ipTextMap.set(product.id, pm);
+        }
+
+        const allVideoUris: string[] = [];
+        const results: InspectionResult[] = allResultRows.map((r) => {
+          let pointKey = r.point_key;
+          if (r.type === 'inspection_point') {
+            const text = ipTextMap.get(r.product_id)?.get(r.point_key);
+            if (text) pointKey = text;
+          }
+          const videoUris: string[] = JSON.parse(r.video_uris || '[]');
+          allVideoUris.push(...videoUris);
+          return {
+            id: r.id, inspectionId: r.inspection_id, productId: r.product_id, pointKey,
+            type: r.type as PointType, value: r.value ?? undefined, passed: r.passed === 1,
+            note: r.note ?? undefined, photoUris: JSON.parse(r.photo_uris || '[]'), videoUris,
+            sampleSize: r.sample_size ?? undefined,
+          };
+        });
+
+        const pdfUri = await generateNestedReport({
+          inspection, products: allProducts, results, columnConfigs, groups,
+          productUnits: productUnitsMap,
+          productInspectionPoints: productInspectionPointsMap,
+          globalInspectionPoints,
+        });
+
+        setReports((prev) =>
+          prev.map((r, i) => (i === 0 ? { ...r, pdfUri, videoUris: allVideoUris, generating: false } : r)),
+        );
+        return;
+      }
+
+      // Normal per-product report
       const productUnitsRow = await db.getFirstAsync<{
         units_inspected: number; batch_size: number;
         production_status: number | null; packing_status: number | null;
@@ -142,22 +246,21 @@ export default function ReportScreen() {
       );
       const inspectionPointConfigs: InspectionPointConfig[] = ipConfigRows.map((r) => ({ text: r.text }));
 
-      const resultRows = await db.getAllAsync<{
-        id: string; inspection_id: string; product_id: string; point_key: string; type: string;
-        value: string | null; passed: number; note: string | null; photo_uris: string;
-        sample_size: string | null;
-      }>('SELECT * FROM inspection_results WHERE inspection_id = ?', [id]);
-
       const ipTextRows = await db.getAllAsync<{ product_id: string; point_index: number; point_text: string }>(
         'SELECT * FROM product_inspection_points WHERE product_id = ?',
         [pr.product.id],
       );
       const ipTextMap = new Map(ipTextRows.map((r) => [`ip:${r.point_index}`, r.point_text]));
 
-      const results: InspectionResult[] = resultRows.map((r) => {
+      const productVideoUris: string[] = [];
+      const results: InspectionResult[] = allResultRows.map((r) => {
         let pointKey = r.point_key;
         if (r.type === 'inspection_point' && ipTextMap.has(r.point_key)) {
           pointKey = ipTextMap.get(r.point_key)!;
+        }
+        const videoUris: string[] = JSON.parse(r.video_uris || '[]');
+        if (r.product_id === pr.product.id) {
+          productVideoUris.push(...videoUris);
         }
         return {
           id: r.id,
@@ -169,6 +272,7 @@ export default function ReportScreen() {
           passed: r.passed === 1,
           note: r.note ?? undefined,
           photoUris: JSON.parse(r.photo_uris || '[]'),
+          videoUris,
           sampleSize: r.sample_size ?? undefined,
         };
       });
@@ -188,7 +292,7 @@ export default function ReportScreen() {
       });
 
       setReports((prev) =>
-        prev.map((r, i) => (i === index ? { ...r, pdfUri, generating: false } : r)),
+        prev.map((r, i) => (i === index ? { ...r, pdfUri, videoUris: productVideoUris, generating: false } : r)),
       );
     } catch (err) {
       setReports((prev) =>
@@ -201,7 +305,7 @@ export default function ReportScreen() {
 
   function regenerate(index: number) {
     setReports((prev) =>
-      prev.map((r, i) => (i === index ? { ...r, pdfUri: null, error: null } : r)),
+      prev.map((r, i) => (i === index ? { ...r, pdfUri: null, videoUris: [], error: null } : r)),
     );
     generateReport(index);
   }
@@ -213,10 +317,15 @@ export default function ReportScreen() {
       return;
     }
     setSharing(true);
+    setShareError(null);
     try {
-      await sharePdf(pr.pdfUri);
-    } catch {
-      // error handled by OS share sheet
+      if (pr.videoUris.length > 0) {
+        await shareBundle(pr.pdfUri, pr.videoUris);
+      } else {
+        await sharePdf(pr.pdfUri);
+      }
+    } catch (err) {
+      setShareError(String(err));
     } finally {
       setSharing(false);
     }
@@ -297,6 +406,11 @@ export default function ReportScreen() {
             )}
           </View>
         )}
+        {shareError && (
+          <ThemedText type="small" style={{ color: '#e74c3c', marginBottom: Spacing.two }}>
+            Share error: {shareError}
+          </ThemedText>
+        )}
         <ThemedText type="small" themeColor="textSecondary" style={styles.note}>
           The PDF will include all inspection results, reference values, pass/fail status, notes, and attached photos.
         </ThemedText>
@@ -321,18 +435,29 @@ export default function ReportScreen() {
               disabled={sharing}
               style={[styles.shareBtn, { opacity: sharing ? 0.7 : 1 }]}>
               <ThemedText style={styles.shareBtnText}>
-                {currentReport?.pdfUri ? '⬆ Share PDF' : '⬆ Generate & Share PDF'}
+                {!currentReport?.pdfUri
+                  ? '⬆ Generate & Share Report'
+                  : currentReport.videoUris.length > 0
+                    ? `⬆ Share Report (PDF + ${currentReport.videoUris.length} video${currentReport.videoUris.length > 1 ? 's' : ''})`
+                    : '⬆ Share PDF'}
               </ThemedText>
             </Pressable>
             {currentReport?.pdfUri && (
               <Pressable
                 onPress={() => regenerate(selectedIndex)}
-                style={[styles.regenerateBtn, { backgroundColor: theme.backgroundElement }]}>
-                <ThemedText style={[styles.regenerateBtnText, { color: theme.textSecondary }]}>
+                style={[styles.secondaryBtn, { backgroundColor: theme.backgroundElement }]}>
+                <ThemedText style={[styles.secondaryBtnText, { color: theme.textSecondary }]}>
                   ↺ Regenerate PDF
                 </ThemedText>
               </Pressable>
             )}
+            <Pressable
+              onPress={() => router.push({ pathname: '/inspection/[id]/template', params: { id } })}
+              style={[styles.secondaryBtn, { backgroundColor: theme.backgroundElement }]}>
+              <ThemedText style={[styles.secondaryBtnText, { color: theme.textSecondary }]}>
+                ✏ Edit
+              </ThemedText>
+            </Pressable>
           </View>
         )}
       </View>
@@ -403,10 +528,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   shareBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  regenerateBtn: {
+  secondaryBtn: {
     borderRadius: 12,
     padding: Spacing.two,
     alignItems: 'center',
   },
-  regenerateBtnText: { fontWeight: '600', fontSize: 14 },
+  secondaryBtnText: { fontWeight: '600', fontSize: 14 },
 });

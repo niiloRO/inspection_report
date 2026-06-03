@@ -16,6 +16,7 @@ interface Props {
   initialNote: string;
   initialSampleSize: string;
   photoUris: string[];
+  videoUris: string[];
   instructions?: string;
   onChangeValue: (value: string, passed: boolean) => void;
   onToggle: (passed: boolean | null) => void;
@@ -23,6 +24,8 @@ interface Props {
   onSampleSizeChange: (sampleSize: string) => void;
   onAddPhoto: () => void;
   onRemovePhoto: (uri: string) => void;
+  onAddVideo: () => void;
+  onRemoveVideo: (uri: string) => void;
 }
 
 function computePassed(
@@ -67,6 +70,7 @@ export function AttributeRow({
   initialNote,
   initialSampleSize,
   photoUris,
+  videoUris,
   instructions,
   onChangeValue,
   onToggle,
@@ -74,6 +78,8 @@ export function AttributeRow({
   onSampleSizeChange,
   onAddPhoto,
   onRemovePhoto,
+  onAddVideo,
+  onRemoveVideo,
 }: Props) {
   const theme = useTheme();
   const [value, setValue] = useState(initialValue);
@@ -178,6 +184,14 @@ export function AttributeRow({
                 </View>
               )}
             </View>
+            <View style={styles.cameraWrapper}>
+              <ThemedText style={styles.iconBtn} onPress={onAddVideo}>🎥</ThemedText>
+              {videoUris.length > 0 && (
+                <View style={styles.photoCount}>
+                  <ThemedText style={styles.photoCountText}>{videoUris.length}</ThemedText>
+                </View>
+              )}
+            </View>
           </View>
         </View>
 
@@ -196,6 +210,19 @@ export function AttributeRow({
           <View style={styles.photos}>
             {photoUris.map((uri, i) => (
               <PhotoThumbnail key={uri} uri={uri} index={i} onRemove={() => onRemovePhoto(uri)} />
+            ))}
+          </View>
+        )}
+
+        {videoUris.length > 0 && (
+          <View style={styles.videos}>
+            {videoUris.map((uri, i) => (
+              <View key={uri} style={[styles.videoChip, { backgroundColor: theme.backgroundElement }]}>
+                <ThemedText style={styles.videoChipText}>🎥 Video {i + 1}</ThemedText>
+                <Pressable onPress={() => onRemoveVideo(uri)} hitSlop={8}>
+                  <ThemedText style={styles.videoChipRemove}>×</ThemedText>
+                </Pressable>
+              </View>
             ))}
           </View>
         )}
@@ -252,6 +279,14 @@ export function AttributeRow({
               </View>
             )}
           </View>
+          <View style={styles.cameraWrapper}>
+            <ThemedText style={styles.iconBtn} onPress={onAddVideo}>🎥</ThemedText>
+            {videoUris.length > 0 && (
+              <View style={styles.photoCount}>
+                <ThemedText style={styles.photoCountText}>{videoUris.length}</ThemedText>
+              </View>
+            )}
+          </View>
         </View>
       </View>
 
@@ -270,6 +305,19 @@ export function AttributeRow({
         <View style={styles.photos}>
           {photoUris.map((uri, i) => (
             <PhotoThumbnail key={uri} uri={uri} index={i} onRemove={() => onRemovePhoto(uri)} />
+          ))}
+        </View>
+      )}
+
+      {videoUris.length > 0 && (
+        <View style={styles.videos}>
+          {videoUris.map((uri, i) => (
+            <View key={uri} style={[styles.videoChip, { backgroundColor: theme.backgroundElement }]}>
+              <ThemedText style={styles.videoChipText}>🎥 Video {i + 1}</ThemedText>
+              <Pressable onPress={() => onRemoveVideo(uri)} hitSlop={8}>
+                <ThemedText style={styles.videoChipRemove}>×</ThemedText>
+              </Pressable>
+            </View>
           ))}
         </View>
       )}
@@ -410,6 +458,28 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     marginTop: Spacing.two,
+  },
+  videos: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: Spacing.one,
+    gap: Spacing.one,
+  },
+  videoChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 12,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 4,
+    gap: 6,
+  },
+  videoChipText: {
+    fontSize: 12,
+  },
+  videoChipRemove: {
+    fontSize: 16,
+    lineHeight: 18,
+    color: '#888',
   },
   // Modal
   modalOverlay: {

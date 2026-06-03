@@ -32,16 +32,16 @@ src/
       settings.tsx           Settings screen (product info columns, groups, global inspection points, settings file import/export)
     inspection/
       _layout.tsx            Stack for inspection screens
-      new.tsx                Product selection + batch info (units, batch, prod %, pack %, supplier, location, invoice NO)
+      new.tsx                Product selection + batch info (units, batch, prod %, pack %, supplier, location, invoice NO, inspector name, report type)
       [id]/
         _layout.tsx          Stack for per-inspection screens
         template.tsx         Inspection form (SectionList, collapsible products + groups + GIPs)
         review.tsx           Review + complete
-        report.tsx           PDF generation + sharing + re-generate
+        report.tsx           PDF generation + sharing (PDF or ZIP) + re-generate + edit
   components/
     inspection/
-      attribute-row.tsx      Dual-mode row: numeric input OR pass/fail toggle; sample size + note + photo + instructions modal
-      inspection-point-row.tsx  Pass/fail toggle (deselectable) + sample size + note + photo
+      attribute-row.tsx      Dual-mode row: numeric input OR pass/fail toggle; sample size + note + photo + video + instructions modal
+      inspection-point-row.tsx  Pass/fail toggle (deselectable) + sample size + note + photo + video
       severity-badge.tsx     High/Medium/Low colored pill
       photo-thumbnail.tsx    Tappable photo preview with full-screen modal
     app-tabs.tsx             NativeTabs triggers (Inspections + Settings)
@@ -52,7 +52,7 @@ src/
   db/
     index.tsx                DatabaseProvider + re-exports useSQLiteContext
     schema.ts                SQL DDL (all CREATE TABLE statements)
-    migrations.ts            PRAGMA user_version migration runner (current version: 4)
+    migrations.ts            PRAGMA user_version migration runner (current version: 6)
   hooks/
     use-inspections.ts       CRUD for inspections + results; includes deleteResult()
     use-products.ts          Product search + inspection point lookup
@@ -60,8 +60,9 @@ src/
   services/
     excel-import.ts          SheetJS (.xlsx) parser — assigns sortOrder per column
     settings-export.ts       Export/import settings as .xlsx (Column Settings + Groups + Global inspection points sheets)
-    pdf-generator.ts         HTML → PDF via expo-print + expo-sharing
+    pdf-generator.ts         HTML → PDF via expo-print + expo-sharing; exports generateProductReport + generateNestedReport
     photo-service.ts         Camera capture + file management
+    video-service.ts         Video recording via expo-image-picker; saves to inspections/{id}/ directory
   types/
     index.ts                 All shared TypeScript interfaces
 ```
@@ -80,7 +81,7 @@ src/
 
 ## Database
 
-SQLite file: `inspection.db` — single local database, no sync. **Current schema version: 4.**
+SQLite file: `inspection.db` — single local database, no sync. **Current schema version: 6.**
 
 **Tables:** `products`, `column_configs`, `inspection_point_configs`, `product_inspection_points`, `inspections`, `inspection_products`, `inspection_results`, `app_meta`, `groups`, `global_inspection_points`
 
@@ -107,16 +108,19 @@ Same schema as `column_configs` (key, label, visible, is_numeric, tolerance_type
 | `production_status` | Optional 0–100 percentage (nullable REAL) |
 | `packing_status` | Optional 0–100 percentage (nullable REAL) |
 
-### Key inspections fields (added in v4)
+### Key inspections fields
 | Column | Purpose |
 |--------|---------|
-| `invoice_no` | Optional invoice number entered when starting inspection |
+| `invoice_no` | Optional invoice number entered when starting inspection (added v4) |
+| `inspector_name` | Optional inspector name entered when starting inspection (added v6) |
+| `report_type` | `'normal'` (one PDF per product) or `'nested'` (one combined PDF, added v6) |
 
-### Key inspection_results fields (added in v4)
+### Key inspection_results fields
 | Column | Purpose |
 |--------|---------|
-| `sample_size` | Optional free-text sample size entered per result row |
+| `sample_size` | Optional free-text sample size entered per result row (added v4) |
 | `type` | `'attribute'`, `'inspection_point'`, or `'global_inspection_point'` |
+| `video_uris` | JSON array of local video file URIs (added v5) |
 
 ### point_key prefix conventions
 | Type | point_key format | Source table |
@@ -162,10 +166,10 @@ Handled by `src/services/settings-export.ts`. Uses SheetJS to read/write a 3-she
 
 ## Inspection Flow
 
-1. `new.tsx` — select products, enter optional global fields (supplier, location, invoice NO) + per-product units/batch/production%/packing% → `createInspection()` → `router.replace` to `template`
-2. `template.tsx` — `SectionList` wrapped in `KeyboardAvoidingView`; per-product sections (collapsible via header chevron); attributes sub-grouped by named group (mixed with GIPs), then ungrouped "Global Inspection Points" sub-section, then "Inspection Points" sub-section; all sub-headers collapsible; auto-saves via `upsertResult()` with 400ms debounce on text, immediate on toggles; `flushPendingSaves()` called before Back/Home/Review navigation; deselecting pass/fail calls `deleteResult()` to restore N/A
+1. `new.tsx` — select products, enter optional global fields (supplier, location, invoice NO, inspector name) + per-product units/batch/production%/packing%; when 2+ products selected shows **Normal / Nested** report type toggle → `createInspection()` → `router.replace` to `template`
+2. `template.tsx` — `SectionList` wrapped in `KeyboardAvoidingView`; per-product sections (collapsible via header chevron); attributes sub-grouped by named group (mixed with GIPs), then ungrouped "Global Inspection Points" sub-section, then "Inspection Points" sub-section; all sub-headers collapsible; auto-saves via `upsertResult()` with 400ms debounce on text, immediate on toggles; `flushPendingSaves()` called before Back/Home/Review navigation; deselecting pass/fail calls `deleteResult()` to restore N/A; each row supports photo + video capture
 3. `review.tsx` — summary + failures sorted by severity (attribute + GIP failures by severity, inspection points sorted last); "Complete" → `completeInspection()` → `router.replace` to `report`
-4. `report.tsx` — calls `generateProductReport()` per product; photos embedded as base64 in HTML; share via `expo-sharing`; "↺ Regenerate PDF" button available once a PDF has been generated
+4. `report.tsx` — for **Normal** type: calls `generateProductReport()` per product with per-product tabs; for **Nested** type: calls `generateNestedReport()` once for all products combined; inspector name printed in all PDFs; photos section always starts on a new page; "↺ Regenerate PDF" and "✏ Edit" buttons in footer; videos are bundled with PDF in a ZIP via jszip when present; share via `expo-sharing`
 
 ---
 
@@ -261,19 +265,43 @@ Permanent inspection points that apply to **every product** in every inspection.
 
 ## PDF Reports
 
-- One PDF per product even if multiple products were inspected together
+Two modes controlled by `inspections.report_type`:
+
+### Normal (per-product)
+- One PDF per product; multiple products show per-product tabs on the report screen
+- PDF saved to `Paths.document.uri + 'reports/{productId}_{inspectionId}.pdf'`
+
+### Nested (combined, multi-product)
+- Single PDF for all products combined; saved to `Paths.document.uri + 'reports/nested_{inspectionId}.pdf'`
+- Attribute/GIP table uses `rowspan` on the attribute cell so each attribute row spans all N product sub-rows
+- Inspection points section lists per-product groups with a blue sub-header per product
+- Header shows: date, inspector, supplier, location, invoice NO; Products table; per-product summary stats
+
+### Common to both
 - Uses `expo-print` (`printToFileAsync`) → HTML string with inline CSS only
-- Header includes: product name, date, units inspected / batch size, supplier, location, invoice NO, production %, packing % (when set)
+- Header includes: inspector name (if set), supplier, location, invoice NO, production %, packing % (when set)
 - Stats: Passed / Failed / Total Filled
 - **Failures by Criticality** summary table: High N, Medium N, Low N (attributes + GIPs combined), Inspection Points N
 - Detailed failures list: attribute + GIP failures grouped by severity, then inspection point failures flat
 - **Product Attribute Results** table (7 columns): Attribute | Sample Size | Reference | Measured | Result | Note | Photo — includes both product info columns and global inspection points (GIPs grouped by group_name; ungrouped GIPs under "Global Inspection Points" sub-header)
 - **Inspection Points** table (5 columns): Inspection Point | Sample Size | Result | Note | Photo
 - Photos embedded as `data:image/jpeg;base64,...` — printed **4-per-page in a 2×2 CSS grid** (`<div class="photo-page">`), each page forced with `page-break-after: always`
+- **Photos section always starts on a new page** via `page-break-before: always` on the wrapping div
 - "Photo N" references in all tables are `<a href="#photo-N">` anchor links; each photo block has `id="photo-N"` — PDF viewers jump to the correct page
-- PDF saved to `Paths.document.uri + 'reports/{productId}_{inspectionId}.pdf'` — destination deleted before copy to allow regeneration
-- "↺ Regenerate PDF" secondary button appears once a PDF exists; tapping it clears the cached URI and re-generates
-- Share via `Sharing.shareAsync(pdfUri, { mimeType: 'application/pdf' })`
+- "↺ Regenerate PDF" and "✏ Edit" buttons in footer; Edit navigates back to `template.tsx` regardless of status
+- If videos were recorded, share bundles PDF + videos in a ZIP via `jszip` (pure JS — no native module needed); otherwise shares PDF directly
+
+---
+
+## Videos
+
+- A 🎥 button on every result row in the template triggers `recordVideo()` from `video-service.ts`
+- Videos are saved to `Paths.document.uri + 'inspections/{inspectionId}/'` (same directory as photos)
+- Stored as `inspection_results.video_uris` (JSON array of local URIs)
+- Videos are **not embedded in the PDF** — they are bundled with the PDF into a ZIP when sharing
+- ZIP is generated with `jszip` (pure JS library) — do NOT use `react-native-zip-archive` (native module, not in dev build)
+- `File.bytes()` reads a file as `Uint8Array`; `File.write(Uint8Array)` writes it — used for jszip integration
+- Video chips appear below photo thumbnails in the template row; tapping "×" removes a video
 
 ---
 
@@ -331,3 +359,6 @@ git push origin feature/pdf-improvements
 12. `scheduleSave()` in `template.tsx` treats a sample size equal to the per-product default (from `units_inspected`) as non-input for the isEmpty check — so deselecting pass/fail on a row with only the default sample size correctly restores N/A. Only an *explicitly modified* sample size (different from the default) keeps the row filled.
 13. Before navigating away from `template.tsx` (Back, Home, Review), always call `await flushPendingSaves()` — it cancels all debounce timers and immediately writes pending results to DB. Skipping this can silently drop the last 400ms of edits.
 14. Android keyboard: `softwareKeyboardLayoutMode: "pan"` in `app.json` makes the view pan upward when the keyboard opens. The template also uses `KeyboardAvoidingView` + `keyboardShouldPersistTaps="handled"` + `automaticallyAdjustKeyboardInsets` on the `SectionList`.
+15. Do NOT use `react-native-zip-archive` — it requires a native module that isn't in the dev build and crashes on import. Use `jszip` (pure JS) instead: `zip.file(name, await new File(uri).bytes())`, then `zipFile.write(await zip.generateAsync({ type: 'uint8array' }))`.
+16. For nested reports, inspection point pointKeys in `results` are translated from `ip:{index}` to the actual text string before being passed to `generateNestedReport` — the resultMap is therefore keyed by `{productId}:{pointText}` for inspection points.
+17. The `report_type` column defaults to `'normal'` in the DB — existing inspections without this column (before migration v6) behave as normal reports. Always use `inspection.reportType ?? 'normal'` when reading it.

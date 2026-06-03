@@ -43,7 +43,9 @@ CREATE TABLE IF NOT EXISTS inspections (
   status TEXT NOT NULL DEFAULT 'in_progress',
   supplier TEXT,
   location TEXT,
-  invoice_no TEXT
+  invoice_no TEXT,
+  inspector_name TEXT,
+  report_type TEXT NOT NULL DEFAULT 'normal'
 );
 
 CREATE TABLE IF NOT EXISTS inspection_products (
@@ -66,6 +68,7 @@ CREATE TABLE IF NOT EXISTS inspection_results (
   passed INTEGER NOT NULL DEFAULT 0,
   note TEXT,
   photo_uris TEXT NOT NULL DEFAULT '[]',
+  video_uris TEXT NOT NULL DEFAULT '[]',
   sample_size TEXT,
   UNIQUE (inspection_id, product_id, point_key)
 );
