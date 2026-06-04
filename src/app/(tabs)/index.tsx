@@ -19,6 +19,13 @@ function formatDate(iso: string): string {
   });
 }
 
+function buildInspectionTitle(item: Inspection): string {
+  const supplier = item.supplier?.trim() || '—';
+  const invoiceNo = item.invoiceNo?.trim() || '—';
+  const ids = item.productIds.join(', ');
+  return `${supplier}  ·  ${invoiceNo}  ·  ${ids}`;
+}
+
 function StatusBadge({ status }: { status: Inspection['status'] }) {
   const color = status === 'completed' ? '#27ae60' : '#3c87f7';
   const label = status === 'completed' ? 'Completed' : 'In Progress';
@@ -71,6 +78,9 @@ function InspectionItem({
           {formatDate(item.date)}
         </ThemedText>
       </View>
+      <ThemedText type="small" style={styles.title} numberOfLines={2}>
+        {buildInspectionTitle(item)}
+      </ThemedText>
       <ThemedText type="small" style={styles.products}>
         {item.productIds.length === 1 ? '1 product' : `${item.productIds.length} products`}
         {'  ·  '}
@@ -141,7 +151,8 @@ const styles = StyleSheet.create({
   itemHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   statusBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
   statusText: { fontSize: 12, fontWeight: '700' },
-  products: { marginTop: 4 },
+  title: { fontWeight: '600', fontSize: 13, marginTop: 2 },
+  products: { marginTop: 2 },
   empty: { alignItems: 'center', paddingTop: Spacing.six, gap: Spacing.two },
   emptyText: { textAlign: 'center', lineHeight: 24 },
 });

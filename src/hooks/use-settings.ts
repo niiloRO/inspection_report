@@ -66,10 +66,12 @@ export function useSettings() {
         isNumeric: r.is_numeric === 1,
         severity: r.severity as Severity,
         group: r.group_name ?? undefined,
-        tolerance:
-          r.tolerance_type && r.tolerance_value != null
-            ? { type: r.tolerance_type as ToleranceType, value: r.tolerance_value }
-            : undefined,
+        tolerance: (() => {
+          if (!r.tolerance_type) return undefined;
+          const type = r.tolerance_type as ToleranceType;
+          if (type === 'min' || type === 'max') return { type, value: r.tolerance_value };
+          return r.tolerance_value != null ? { type, value: r.tolerance_value } : undefined;
+        })(),
         instructions: r.instructions ?? undefined,
         sortOrder: r.sort_order,
       })),
@@ -112,9 +114,12 @@ export function useSettings() {
       isNumeric: r.is_numeric === 1,
       severity: r.severity as Severity,
       group: r.group_name ?? undefined,
-      tolerance: r.tolerance_type && r.tolerance_value != null
-        ? { type: r.tolerance_type as ToleranceType, value: r.tolerance_value }
-        : undefined,
+      tolerance: (() => {
+        if (!r.tolerance_type) return undefined;
+        const type = r.tolerance_type as ToleranceType;
+        if (type === 'min' || type === 'max') return { type, value: r.tolerance_value };
+        return r.tolerance_value != null ? { type, value: r.tolerance_value } : undefined;
+      })(),
       instructions: r.instructions ?? undefined,
       sortOrder: r.sort_order,
     })));
@@ -159,7 +164,7 @@ export function useSettings() {
     await loadGlobalPoints();
   }
 
-  async function updateGipTolerance(key: string, tolerance: { type: ToleranceType; value: number } | undefined) {
+  async function updateGipTolerance(key: string, tolerance: { type: ToleranceType; value: number | null } | undefined) {
     if (tolerance) {
       await db.runAsync(
         'UPDATE global_inspection_points SET tolerance_type = ?, tolerance_value = ? WHERE key = ?',
@@ -194,7 +199,7 @@ export function useSettings() {
 
   async function updateColumnTolerance(
     key: string,
-    tolerance: { type: ToleranceType; value: number } | undefined,
+    tolerance: { type: ToleranceType; value: number | null } | undefined,
   ) {
     if (tolerance) {
       await db.runAsync(

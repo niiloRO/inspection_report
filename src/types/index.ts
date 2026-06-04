@@ -1,7 +1,7 @@
 export type Severity = 'high' | 'medium' | 'low';
 export type InspectionStatus = 'in_progress' | 'completed';
 export type PointType = 'attribute' | 'inspection_point' | 'global_inspection_point';
-export type ToleranceType = 'absolute' | 'percent';
+export type ToleranceType = 'absolute' | 'percent' | 'min' | 'max';
 
 export interface Product {
   id: string;
@@ -21,7 +21,7 @@ export interface ColumnConfig {
   isNumeric: boolean;
   severity: Severity;
   group?: string;
-  tolerance?: { type: ToleranceType; value: number };
+  tolerance?: { type: ToleranceType; value: number | null };
   instructions?: string;
   sortOrder: number;
 }

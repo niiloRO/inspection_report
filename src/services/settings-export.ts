@@ -22,7 +22,7 @@ export async function exportSettings(columnConfigs: ColumnConfig[], groups: Grou
       cap(col.severity),
       col.group ?? '',
       col.isNumeric && col.tolerance ? cap(col.tolerance.type) : '',
-      col.isNumeric && col.tolerance ? col.tolerance.value : '',
+      col.isNumeric && col.tolerance ? (col.tolerance.value ?? '') : '',
       col.instructions ?? '',
     ]);
   }
@@ -43,15 +43,29 @@ export async function exportSettings(columnConfigs: ColumnConfig[], groups: Grou
       cap(gip.severity),
       gip.group ?? '',
       gip.isNumeric && gip.tolerance ? cap(gip.tolerance.type) : '',
-      gip.isNumeric && gip.tolerance ? gip.tolerance.value : '',
+      gip.isNumeric && gip.tolerance ? (gip.tolerance.value ?? '') : '',
       gip.instructions ?? '',
     ]);
   }
+
+  const instructionsSheet: string[][] = [
+    ['Column', 'Description', 'Accepted Values'],
+    ['Key', 'Unique machine-readable identifier for the column. Used internally to match settings across imports.', 'Any text without spaces, e.g. net_weight'],
+    ['Label', 'The display name shown to inspectors in the app.', 'Any text, e.g. Net Weight (g)'],
+    ['Enabled', 'Whether this column is shown during inspections.', 'Yes or No'],
+    ['Type', 'Data input type. Numeric columns use a number input and can have tolerances. Text columns use Pass/Fail buttons.', 'Numeric or Text'],
+    ['Criticality', 'Failure severity level. Affects grouping and highlighting in PDF reports.', 'High, Medium, or Low'],
+    ['Group', 'Optional group name for organizing columns. Must exactly match a name in the Groups sheet.', 'Any group name from the Groups sheet, or leave empty for no group'],
+    ['Tolerance Type', 'For Numeric columns only. Defines how pass/fail is determined. Absolute: pass if measured is within ±value of reference. Percent: pass if measured is within ±value% of reference. Min: pass if measured ≥ value (leave Tolerance Value empty to compare against the product reference value instead). Max: pass if measured ≤ value (leave Tolerance Value empty to compare against the product reference value instead).', 'Absolute, Percent, Min, or Max — leave empty for Text columns'],
+    ['Tolerance Value', 'The numeric tolerance limit or boundary. Used together with Tolerance Type.', 'Any positive number — leave empty for Text columns or if no tolerance'],
+    ['Instructions', 'Optional measurement instructions shown to inspectors as a "?" popup during the inspection.', 'Any free text description'],
+  ];
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sheet1), 'Column Settings');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sheet2), 'Groups');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sheet3), 'Global inspection points');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(instructionsSheet), 'Instructions');
   const base64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
 
   const dirUri = Paths.cache.uri + 'settings_export/';
@@ -90,11 +104,13 @@ export async function parseSettingsFile(fileUri: string): Promise<ParsedSettings
       : 'medium';
 
     const tolTypeRaw = String(row['Tolerance Type']).trim().toLowerCase();
-    let toleranceType: 'absolute' | 'percent' | null = null;
+    let toleranceType: 'absolute' | 'percent' | 'min' | 'max' | null = null;
     let toleranceValue: number | null = null;
     if (isNumeric) {
       if (tolTypeRaw === 'absolute') toleranceType = 'absolute';
       else if (tolTypeRaw === 'percent') toleranceType = 'percent';
+      else if (tolTypeRaw === 'min') toleranceType = 'min';
+      else if (tolTypeRaw === 'max') toleranceType = 'max';
       const tv = Number(row['Tolerance Value']);
       if (isFinite(tv)) toleranceValue = tv;
     }
@@ -134,11 +150,13 @@ export async function parseSettingsFile(fileUri: string): Promise<ParsedSettings
         ? (sevRaw as 'high' | 'medium' | 'low')
         : 'medium';
       const tolTypeRaw = String(row['Tolerance Type']).trim().toLowerCase();
-      let toleranceType: 'absolute' | 'percent' | null = null;
+      let toleranceType: 'absolute' | 'percent' | 'min' | 'max' | null = null;
       let toleranceValue: number | null = null;
       if (isNumeric) {
         if (tolTypeRaw === 'absolute') toleranceType = 'absolute';
         else if (tolTypeRaw === 'percent') toleranceType = 'percent';
+        else if (tolTypeRaw === 'min') toleranceType = 'min';
+        else if (tolTypeRaw === 'max') toleranceType = 'max';
         const tv = Number(row['Tolerance Value']);
         if (isFinite(tv)) toleranceValue = tv;
       }

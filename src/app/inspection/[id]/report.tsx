@@ -96,9 +96,12 @@ export default function ReportScreen() {
         isNumeric: r.is_numeric === 1,
         severity: r.severity as Severity,
         group: r.group_name ?? undefined,
-        tolerance: r.tolerance_type && r.tolerance_value != null
-          ? { type: r.tolerance_type as ToleranceType, value: r.tolerance_value }
-          : undefined,
+        tolerance: (() => {
+          if (!r.tolerance_type) return undefined;
+          const type = r.tolerance_type as ToleranceType;
+          if (type === 'min' || type === 'max') return { type, value: r.tolerance_value };
+          return r.tolerance_value != null ? { type, value: r.tolerance_value } : undefined;
+        })(),
         instructions: r.instructions ?? undefined,
         sortOrder: r.sort_order,
       })));
@@ -148,9 +151,12 @@ export default function ReportScreen() {
         key: r.key, label: r.label, visible: true, isNumeric: r.is_numeric === 1,
         severity: r.severity as Severity,
         group: r.group_name ?? undefined,
-        tolerance: r.tolerance_type && r.tolerance_value != null
-          ? { type: r.tolerance_type as 'absolute' | 'percent', value: r.tolerance_value }
-          : undefined,
+        tolerance: (() => {
+          if (!r.tolerance_type) return undefined;
+          const type = r.tolerance_type as ToleranceType;
+          if (type === 'min' || type === 'max') return { type, value: r.tolerance_value };
+          return r.tolerance_value != null ? { type, value: r.tolerance_value } : undefined;
+        })(),
         sortOrder: r.sort_order,
       }));
 

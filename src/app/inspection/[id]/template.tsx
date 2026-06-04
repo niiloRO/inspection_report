@@ -20,7 +20,7 @@ import { useInspections } from '@/hooks/use-inspections';
 import { useTheme } from '@/hooks/use-theme';
 import { takePhoto } from '@/services/photo-service';
 import { recordVideo } from '@/services/video-service';
-import type { ColumnConfig, GlobalInspectionPoint, Group, Inspection, InspectionPointConfig, Product, ProductInspectionPoint, Severity } from '@/types';
+import type { ColumnConfig, GlobalInspectionPoint, Group, Inspection, InspectionPointConfig, Product, ProductInspectionPoint, Severity, ToleranceType } from '@/types';
 
 interface AttributeItem {
   kind: 'attribute';
@@ -109,9 +109,12 @@ async function loadTemplateData(db: ReturnType<typeof useSQLiteContext>, inspect
     isNumeric: r.is_numeric === 1,
     severity: r.severity as Severity,
     group: r.group_name ?? undefined,
-    tolerance: r.tolerance_type && r.tolerance_value != null
-      ? { type: r.tolerance_type as 'absolute' | 'percent', value: r.tolerance_value }
-      : undefined,
+    tolerance: (() => {
+      if (!r.tolerance_type) return undefined;
+      const type = r.tolerance_type as ToleranceType;
+      if (type === 'min' || type === 'max') return { type, value: r.tolerance_value };
+      return r.tolerance_value != null ? { type, value: r.tolerance_value } : undefined;
+    })(),
     instructions: r.instructions ?? undefined,
     sortOrder: r.sort_order,
   }));
@@ -128,9 +131,12 @@ async function loadTemplateData(db: ReturnType<typeof useSQLiteContext>, inspect
     isNumeric: r.is_numeric === 1,
     severity: r.severity as Severity,
     group: r.group_name ?? undefined,
-    tolerance: r.tolerance_type && r.tolerance_value != null
-      ? { type: r.tolerance_type as 'absolute' | 'percent', value: r.tolerance_value }
-      : undefined,
+    tolerance: (() => {
+      if (!r.tolerance_type) return undefined;
+      const type = r.tolerance_type as ToleranceType;
+      if (type === 'min' || type === 'max') return { type, value: r.tolerance_value };
+      return r.tolerance_value != null ? { type, value: r.tolerance_value } : undefined;
+    })(),
     instructions: r.instructions ?? undefined,
     sortOrder: r.sort_order,
   }));

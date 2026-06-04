@@ -17,6 +17,19 @@ const SEVERITY_LABELS: Record<Severity, string> = {
   low: 'Low',
 };
 
+function sanitizeFilename(s: string): string {
+  return s.replace(/[/\\:*?"<>|]/g, '').replace(/\s+/g, '_').trim();
+}
+
+function buildReportFilename(supplier?: string, invoiceNo?: string, productIds?: string[]): string {
+  const parts = [
+    supplier ? sanitizeFilename(supplier) : 'NoSupplier',
+    invoiceNo ? sanitizeFilename(invoiceNo) : 'NoInvoice',
+    (productIds ?? []).map(sanitizeFilename).join('-') || 'NoProduct',
+  ];
+  return parts.join('_');
+}
+
 function escapeHtml(str: string): string {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -219,7 +232,7 @@ export async function generateProductReport(options: ReportOptions): Promise<str
     gipGroupedMap.get(g)!.push(gip);
   }
 
-  function attrRow(col: ColumnConfig): string {
+  function attrRow(col: ColumnConfig, rowIndex: number): string {
     const pointKey = `attr:${col.key}`;
     const r = resultMap.get(pointKey);
     const refVal = product.attributes[col.key];
@@ -228,7 +241,8 @@ export async function generateProductReport(options: ReportOptions): Promise<str
     const photoNum = photoNumberMap.get(pointKey);
     const noteVal = r?.note ? escapeHtml(r.note) : '—';
     const sampleSizeVal = r?.sampleSize ? escapeHtml(r.sampleSize) : '—';
-    return `<tr>
+    const rowBg = rowIndex % 2 === 1 ? ' style="background:#f3f3f3;"' : '';
+    return `<tr${rowBg}>
       <td>${escapeHtml(col.label)}</td>
       <td>${sampleSizeVal}</td>
       <td>${escapeHtml(String(refVal ?? '—'))}</td>
@@ -239,7 +253,7 @@ export async function generateProductReport(options: ReportOptions): Promise<str
     </tr>`;
   }
 
-  function gipRow(gip: GlobalInspectionPoint): string {
+  function gipRow(gip: GlobalInspectionPoint, rowIndex: number): string {
     const pointKey = `gip:${gip.key}`;
     const r = resultMap.get(pointKey);
     const measuredVal = r?.value ?? '—';
@@ -247,7 +261,8 @@ export async function generateProductReport(options: ReportOptions): Promise<str
     const photoNum = photoNumberMap.get(pointKey);
     const noteVal = r?.note ? escapeHtml(r.note) : '—';
     const sampleSizeVal = r?.sampleSize ? escapeHtml(r.sampleSize) : '—';
-    return `<tr>
+    const rowBg = rowIndex % 2 === 1 ? ' style="background:#f3f3f3;"' : '';
+    return `<tr${rowBg}>
       <td>${escapeHtml(gip.label)}</td>
       <td>${sampleSizeVal}</td>
       <td>—</td>
@@ -259,44 +274,48 @@ export async function generateProductReport(options: ReportOptions): Promise<str
   }
 
   function groupSubHeader(label: string): string {
-    return `<tr style="background:#f5f5f5;">
-      <td colspan="7" style="padding:5px 8px;font-size:11px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;color:#555;">${escapeHtml(label)}</td>
+    return `<tr style="background:#d0e4f8;">
+      <td colspan="7" style="padding:5px 8px;font-size:11px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;color:#1a5fa8;">${escapeHtml(label)}</td>
     </tr>`;
   }
 
   const hasNamedGroups = groups.length > 0;
   const ungroupedGips = gipGroupedMap.get(null) ?? [];
 
+  let rowIdx = 0;
   let attributeRows = '';
   for (const group of groups) {
     const cols = groupedCols.get(group.name) ?? [];
     const gips = gipGroupedMap.get(group.name) ?? [];
     if (cols.length === 0 && gips.length === 0) continue;
     if (hasNamedGroups) attributeRows += groupSubHeader(group.name);
-    for (const col of cols) attributeRows += attrRow(col);
-    for (const gip of gips) attributeRows += gipRow(gip);
+    for (const col of cols) attributeRows += attrRow(col, rowIdx++);
+    for (const gip of gips) attributeRows += gipRow(gip, rowIdx++);
   }
 
   const ungroupedCols = groupedCols.get(null) ?? [];
   if (ungroupedCols.length > 0) {
     if (hasNamedGroups) attributeRows += groupSubHeader('Other');
-    for (const col of ungroupedCols) attributeRows += attrRow(col);
+    for (const col of ungroupedCols) attributeRows += attrRow(col, rowIdx++);
   }
 
   if (ungroupedGips.length > 0) {
     attributeRows += groupSubHeader('Global Inspection Points');
-    for (const gip of ungroupedGips) attributeRows += gipRow(gip);
+    for (const gip of ungroupedGips) attributeRows += gipRow(gip, rowIdx++);
   }
 
   // --- Inspection point results table ---
   let pointRows = '';
+  let pointRowIdx = 0;
   for (const pip of productInspectionPoints) {
     const r = resultMap.get(pip.pointText);
     const st: 'pass' | 'fail' | 'na' = r ? (r.passed ? 'pass' : 'fail') : 'na';
     const photoNum = r ? photoNumberMap.get(pip.pointText) : undefined;
     const noteVal = r?.note ? escapeHtml(r.note) : '—';
     const sampleSizeVal = r?.sampleSize ? escapeHtml(r.sampleSize) : '—';
-    pointRows += `<tr>
+    const rowBg = pointRowIdx % 2 === 1 ? ' style="background:#f3f3f3;"' : '';
+    pointRowIdx++;
+    pointRows += `<tr${rowBg}>
       <td style="font-size:12px;">${escapeHtml(pip.pointText)}</td>
       <td>${sampleSizeVal}</td>
       <td>${statusBadge(st)}</td>
@@ -352,7 +371,7 @@ export async function generateProductReport(options: ReportOptions): Promise<str
   .stat { display: inline-block; margin-right: 24px; }
   .stat span { font-size: 20px; font-weight: bold; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 16px; }
-  th { background: #f5f5f5; text-align: left; padding: 6px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  th { background: #d0d0d0; text-align: left; padding: 6px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
   td { padding: 5px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
   .photo-page { page-break-after: always; break-after: page; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 10px; height: 100vh; box-sizing: border-box; padding: 4px; }
   .photo-block { display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; border: 1px solid #eee; border-radius: 4px; padding: 6px; }
@@ -412,7 +431,8 @@ ${photosHtml ? `<div style="page-break-before:always;break-before:page;"><h2>Att
 
   const reportsDir = new Directory(Paths.document.uri + 'reports/');
   reportsDir.create({ intermediates: true, idempotent: true });
-  const destFile = new File(reportsDir.uri + `${product.id}_${inspection.id}.pdf`);
+  const filename = buildReportFilename(inspection.supplier, inspection.invoiceNo, [product.id]);
+  const destFile = new File(reportsDir.uri + `${filename}.pdf`);
   if (destFile.exists) destFile.delete();
   new File(uri).copy(destFile);
   return destFile.uri;
@@ -597,15 +617,19 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
   // Nested attribute/GIP table
   const hasNamedGroups = groups.length > 0;
   const n = products.length;
+  let nestedAttrIdx = 0;
 
   function nestedRows(cols: ColumnConfig[], gips: GlobalInspectionPoint[], groupLabel: string | null): string {
     let rows = '';
     if (groupLabel !== null) {
-      rows += `<tr style="background:#f5f5f5;">
-        <td colspan="8" style="padding:5px 8px;font-size:11px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;color:#555;">${escapeHtml(groupLabel)}</td>
+      rows += `<tr style="background:#d0e4f8;">
+        <td colspan="8" style="padding:5px 8px;font-size:11px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;color:#1a5fa8;">${escapeHtml(groupLabel)}</td>
       </tr>`;
     }
     for (const col of cols) {
+      const bg = nestedAttrIdx % 2 === 1 ? '#f3f3f3' : '';
+      nestedAttrIdx++;
+      const trStyle = bg ? ` style="background:${bg};"` : '';
       products.forEach((product, pi) => {
         const pk = `attr:${col.key}`;
         const r = resultMap.get(`${product.id}:${pk}`);
@@ -613,8 +637,8 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
         const measuredVal = r?.value ?? '—';
         const photoNum = photoNumberMap.get(`${product.id}:${pk}`);
         if (pi === 0) {
-          rows += `<tr>
-            <td rowspan="${n}" style="vertical-align:middle;font-weight:500;">${escapeHtml(col.label)}</td>
+          rows += `<tr${trStyle}>
+            <td rowspan="${n}" style="vertical-align:middle;font-weight:500;${bg ? `background:${bg};` : ''}">${escapeHtml(col.label)}</td>
             <td>${escapeHtml(product.id)}</td>
             <td>${r?.sampleSize ? escapeHtml(r.sampleSize) : '—'}</td>
             <td>${escapeHtml(String(product.attributes[col.key] ?? '—'))}</td>
@@ -624,7 +648,7 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
             <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
           </tr>`;
         } else {
-          rows += `<tr>
+          rows += `<tr${trStyle}>
             <td>${escapeHtml(product.id)}</td>
             <td>${r?.sampleSize ? escapeHtml(r.sampleSize) : '—'}</td>
             <td>${escapeHtml(String(product.attributes[col.key] ?? '—'))}</td>
@@ -637,6 +661,9 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
       });
     }
     for (const gip of gips) {
+      const bg = nestedAttrIdx % 2 === 1 ? '#f3f3f3' : '';
+      nestedAttrIdx++;
+      const trStyle = bg ? ` style="background:${bg};"` : '';
       products.forEach((product, pi) => {
         const pk = `gip:${gip.key}`;
         const r = resultMap.get(`${product.id}:${pk}`);
@@ -644,8 +671,8 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
         const measuredVal = r?.value ?? '—';
         const photoNum = photoNumberMap.get(`${product.id}:${pk}`);
         if (pi === 0) {
-          rows += `<tr>
-            <td rowspan="${n}" style="vertical-align:middle;font-weight:500;">${escapeHtml(gip.label)}</td>
+          rows += `<tr${trStyle}>
+            <td rowspan="${n}" style="vertical-align:middle;font-weight:500;${bg ? `background:${bg};` : ''}">${escapeHtml(gip.label)}</td>
             <td>${escapeHtml(product.id)}</td>
             <td>${r?.sampleSize ? escapeHtml(r.sampleSize) : '—'}</td>
             <td>—</td>
@@ -655,7 +682,7 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
             <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
           </tr>`;
         } else {
-          rows += `<tr>
+          rows += `<tr${trStyle}>
             <td>${escapeHtml(product.id)}</td>
             <td>${r?.sampleSize ? escapeHtml(r.sampleSize) : '—'}</td>
             <td>—</td>
@@ -687,6 +714,7 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
 
   // Inspection points section (per-product sub-headers)
   let pointRows = '';
+  let ipRowIdx = 0;
   for (const product of products) {
     const points = productInspectionPoints.get(product.id) ?? [];
     if (points.length === 0) continue;
@@ -697,7 +725,9 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
       const r = resultMap.get(`${product.id}:${pip.pointText}`);
       const st: 'pass' | 'fail' | 'na' = r ? (r.passed ? 'pass' : 'fail') : 'na';
       const photoNum = photoNumberMap.get(`${product.id}:${pip.pointText}`);
-      pointRows += `<tr>
+      const rowBg = ipRowIdx % 2 === 1 ? ' style="background:#f3f3f3;"' : '';
+      ipRowIdx++;
+      pointRows += `<tr${rowBg}>
         <td style="font-size:12px;">${escapeHtml(pip.pointText)}</td>
         <td>${r?.sampleSize ? escapeHtml(r.sampleSize) : '—'}</td>
         <td>${statusBadge(st)}</td>
@@ -735,7 +765,7 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
   h3 { font-size: 13px; margin: 10px 0 4px; }
   .meta { color: #666; font-size: 12px; margin-bottom: 16px; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 16px; }
-  th { background: #f5f5f5; text-align: left; padding: 6px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  th { background: #d0d0d0; text-align: left; padding: 6px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
   td { padding: 5px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
   .photo-page { page-break-after: always; break-after: page; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 10px; height: 100vh; box-sizing: border-box; padding: 4px; }
   .photo-block { display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; border: 1px solid #eee; border-radius: 4px; padding: 6px; }
@@ -789,7 +819,8 @@ ${photosHtml ? `<div style="page-break-before:always;break-before:page;"><h2>Att
   const { uri } = await Print.printToFileAsync({ html });
   const reportsDir = new Directory(Paths.document.uri + 'reports/');
   reportsDir.create({ intermediates: true, idempotent: true });
-  const destFile = new File(reportsDir.uri + `nested_${inspection.id}.pdf`);
+  const filename = buildReportFilename(inspection.supplier, inspection.invoiceNo, products.map((p) => p.id));
+  const destFile = new File(reportsDir.uri + `${filename}.pdf`);
   if (destFile.exists) destFile.delete();
   new File(uri).copy(destFile);
   return destFile.uri;

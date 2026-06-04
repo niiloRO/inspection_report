@@ -51,7 +51,7 @@ function ColumnRow({
   col: ColumnConfig;
   groups: Group[];
   onUpdateVisibility: (key: string, visible: boolean) => void;
-  onUpdateTolerance: (key: string, tolerance: { type: 'absolute' | 'percent'; value: number } | undefined) => void;
+  onUpdateTolerance: (key: string, tolerance: { type: ToleranceType; value: number | null } | undefined) => void;
   onUpdateSeverity: (key: string, severity: Severity) => void;
   onUpdateGroup: (key: string, group: string | null) => void;
   onUpdateType: (key: string, isNumeric: boolean) => void;
@@ -59,13 +59,15 @@ function ColumnRow({
 }) {
   const theme = useTheme();
   const [showTolerance, setShowTolerance] = useState(!!col.tolerance);
-  const [tolType, setTolType] = useState<'absolute' | 'percent'>(col.tolerance?.type ?? 'absolute');
+  const [tolType, setTolType] = useState<ToleranceType>(col.tolerance?.type ?? 'absolute');
   const [tolValue, setTolValue] = useState(col.tolerance?.value?.toString() ?? '');
   const [instructions, setInstructions] = useState(col.instructions ?? '');
 
   function handleToleranceSave() {
     const v = parseFloat(tolValue);
-    if (!isNaN(v) && v >= 0) {
+    if (tolType === 'min' || tolType === 'max') {
+      onUpdateTolerance(col.key, { type: tolType, value: isNaN(v) ? null : v });
+    } else if (!isNaN(v) && v >= 0) {
       onUpdateTolerance(col.key, { type: tolType, value: v });
     }
   }
@@ -162,16 +164,21 @@ function ColumnRow({
           {col.isNumeric && showTolerance && (
             <View style={styles.toleranceRow}>
               <View style={styles.tolTypeRow}>
-                {(['absolute', 'percent'] as const).map((t) => (
+                {(['absolute', 'percent', 'min', 'max'] as const).map((t) => (
                   <TouchableOpacity
                     key={t}
                     onPress={() => {
                       setTolType(t);
-                      onUpdateTolerance(col.key, { type: t, value: parseFloat(tolValue) || 0 });
+                      const v = parseFloat(tolValue);
+                      if (t === 'min' || t === 'max') {
+                        onUpdateTolerance(col.key, { type: t, value: isNaN(v) ? null : v });
+                      } else {
+                        onUpdateTolerance(col.key, { type: t, value: isNaN(v) ? 0 : v });
+                      }
                     }}
                     style={[styles.tolTypeBtn, { backgroundColor: tolType === t ? '#3c87f7' : theme.backgroundElement }]}>
                     <ThemedText type="small" style={{ color: tolType === t ? '#fff' : theme.text }}>
-                      {t === 'absolute' ? 'Absolute' : '% Percent'}
+                      {t === 'absolute' ? 'Absolute' : t === 'percent' ? '% Percent' : t === 'min' ? 'Min' : 'Max'}
                     </ThemedText>
                   </TouchableOpacity>
                 ))}
@@ -183,11 +190,11 @@ function ColumnRow({
                   onChangeText={setTolValue}
                   onBlur={handleToleranceSave}
                   keyboardType="decimal-pad"
-                  placeholder="0.0"
+                  placeholder={tolType === 'min' || tolType === 'max' ? 'use ref value' : '0.0'}
                   placeholderTextColor={theme.textSecondary}
                 />
                 <ThemedText type="small" themeColor="textSecondary">
-                  {tolType === 'percent' ? '%' : 'units'}
+                  {tolType === 'percent' ? '%' : tolType === 'min' ? 'min' : tolType === 'max' ? 'max' : 'units'}
                 </ThemedText>
               </View>
             </View>
@@ -301,7 +308,7 @@ function GipRow({
   groups: Group[];
   onDelete: (key: string) => void;
   onUpdateVisibility: (key: string, visible: boolean) => void;
-  onUpdateTolerance: (key: string, tolerance: { type: ToleranceType; value: number } | undefined) => void;
+  onUpdateTolerance: (key: string, tolerance: { type: ToleranceType; value: number | null } | undefined) => void;
   onUpdateSeverity: (key: string, severity: Severity) => void;
   onUpdateGroup: (key: string, group: string | null) => void;
   onUpdateType: (key: string, isNumeric: boolean) => void;
@@ -315,7 +322,9 @@ function GipRow({
 
   function handleToleranceSave() {
     const v = parseFloat(tolValue);
-    if (!isNaN(v) && v >= 0) {
+    if (tolType === 'min' || tolType === 'max') {
+      onUpdateTolerance(gip.key, { type: tolType, value: isNaN(v) ? null : v });
+    } else if (!isNaN(v) && v >= 0) {
       onUpdateTolerance(gip.key, { type: tolType, value: v });
     }
   }
@@ -415,16 +424,21 @@ function GipRow({
           {gip.isNumeric && showTolerance && (
             <View style={styles.toleranceRow}>
               <View style={styles.tolTypeRow}>
-                {(['absolute', 'percent'] as const).map((t) => (
+                {(['absolute', 'percent', 'min', 'max'] as const).map((t) => (
                   <TouchableOpacity
                     key={t}
                     onPress={() => {
                       setTolType(t);
-                      onUpdateTolerance(gip.key, { type: t, value: parseFloat(tolValue) || 0 });
+                      const v = parseFloat(tolValue);
+                      if (t === 'min' || t === 'max') {
+                        onUpdateTolerance(gip.key, { type: t, value: isNaN(v) ? null : v });
+                      } else {
+                        onUpdateTolerance(gip.key, { type: t, value: isNaN(v) ? 0 : v });
+                      }
                     }}
                     style={[styles.tolTypeBtn, { backgroundColor: tolType === t ? '#3c87f7' : theme.backgroundElement }]}>
                     <ThemedText type="small" style={{ color: tolType === t ? '#fff' : theme.text }}>
-                      {t === 'absolute' ? 'Absolute' : '% Percent'}
+                      {t === 'absolute' ? 'Absolute' : t === 'percent' ? '% Percent' : t === 'min' ? 'Min' : 'Max'}
                     </ThemedText>
                   </TouchableOpacity>
                 ))}
@@ -436,11 +450,11 @@ function GipRow({
                   onChangeText={setTolValue}
                   onBlur={handleToleranceSave}
                   keyboardType="decimal-pad"
-                  placeholder="0.0"
+                  placeholder={tolType === 'min' || tolType === 'max' ? 'use ref value' : '0.0'}
                   placeholderTextColor={theme.textSecondary}
                 />
                 <ThemedText type="small" themeColor="textSecondary">
-                  {tolType === 'percent' ? '%' : 'units'}
+                  {tolType === 'percent' ? '%' : tolType === 'min' ? 'min' : tolType === 'max' ? 'max' : 'units'}
                 </ThemedText>
               </View>
             </View>
@@ -478,7 +492,7 @@ function GlobalInspectionPointsSection({
   onAdd: (label: string) => void;
   onDelete: (key: string) => void;
   onUpdateVisibility: (key: string, visible: boolean) => void;
-  onUpdateTolerance: (key: string, tolerance: { type: ToleranceType; value: number } | undefined) => void;
+  onUpdateTolerance: (key: string, tolerance: { type: ToleranceType; value: number | null } | undefined) => void;
   onUpdateSeverity: (key: string, severity: Severity) => void;
   onUpdateGroup: (key: string, group: string | null) => void;
   onUpdateType: (key: string, isNumeric: boolean) => void;

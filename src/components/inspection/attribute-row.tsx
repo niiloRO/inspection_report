@@ -33,15 +33,29 @@ function computePassed(
   reference: string | number | undefined,
   tolerance: ColumnConfig['tolerance'],
 ): boolean {
-  if (!tolerance || reference === undefined || reference === '') return true;
+  if (!tolerance) return true;
   const measured = parseFloat(value);
+  if (isNaN(measured)) return true;
+  if (tolerance.type === 'min') {
+    const bound = tolerance.value !== null
+      ? tolerance.value
+      : (reference !== undefined && reference !== '' ? parseFloat(String(reference)) : NaN);
+    return isNaN(bound) ? true : measured >= bound;
+  }
+  if (tolerance.type === 'max') {
+    const bound = tolerance.value !== null
+      ? tolerance.value
+      : (reference !== undefined && reference !== '' ? parseFloat(String(reference)) : NaN);
+    return isNaN(bound) ? true : measured <= bound;
+  }
+  if (reference === undefined || reference === '') return true;
   const ref = parseFloat(String(reference));
-  if (isNaN(measured) || isNaN(ref)) return true;
+  if (isNaN(ref)) return true;
   if (tolerance.type === 'absolute') {
-    return Math.abs(measured - ref) <= tolerance.value;
+    return Math.abs(measured - ref) <= (tolerance.value ?? 0);
   }
   if (ref === 0) return measured === 0;
-  return (Math.abs(measured - ref) / Math.abs(ref)) * 100 <= tolerance.value;
+  return (Math.abs(measured - ref) / Math.abs(ref)) * 100 <= (tolerance.value ?? 0);
 }
 
 function InstructionsModal({ instructions, onClose }: { instructions: string; onClose: () => void }) {

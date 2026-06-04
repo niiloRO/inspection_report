@@ -149,13 +149,14 @@ Same schema as `column_configs` (key, label, visible, is_numeric, tolerance_type
 
 ## Settings Export/Import
 
-Handled by `src/services/settings-export.ts`. Uses SheetJS to read/write a 3-sheet `.xlsx` file:
+Handled by `src/services/settings-export.ts`. Uses SheetJS to read/write a 4-sheet `.xlsx` file:
 
 | Sheet | Columns | Purpose |
 |-------|---------|---------|
 | `Column Settings` | Key, Label, Enabled, Type, Criticality, Group, Tolerance Type, Tolerance Value, Instructions | Product info column configuration |
 | `Groups` | Group Name | Named groups in sort order |
 | `Global inspection points` | Same columns as Column Settings | Global inspection point configuration |
+| `Instructions` | Column, Description, Accepted Values | Human-readable guide to every field in the settings file |
 
 - **Export**: shares the file via `expo-sharing` — call `exportSettings(columnConfigs, groups, globalInspectionPoints)`
 - **Import**: `parseSettingsFile(uri)` → `importSettings(fileUri)` in `use-settings.ts` applies settings in a transaction (update columns → rebuild groups → re-attach group assignments → replace global inspection points)
@@ -166,6 +167,7 @@ Handled by `src/services/settings-export.ts`. Uses SheetJS to read/write a 3-she
 
 ## Inspection Flow
 
+0. `(tabs)/index.tsx` — Inspections list; each card shows a title line (`Supplier · InvoiceNo · ProductIDs`) above the product count/date line, built by `buildInspectionTitle(item)`
 1. `new.tsx` — select products, enter optional global fields (supplier, location, invoice NO, inspector name) + per-product units/batch/production%/packing%; when 2+ products selected shows **Normal / Nested** report type toggle → `createInspection()` → `router.replace` to `template`
 2. `template.tsx` — `SectionList` wrapped in `KeyboardAvoidingView`; per-product sections (collapsible via header chevron); attributes sub-grouped by named group (mixed with GIPs), then ungrouped "Global Inspection Points" sub-section, then "Inspection Points" sub-section; all sub-headers collapsible; auto-saves via `upsertResult()` with 400ms debounce on text, immediate on toggles; `flushPendingSaves()` called before Back/Home/Review navigation; deselecting pass/fail calls `deleteResult()` to restore N/A; each row supports photo + video capture
 3. `review.tsx` — summary + failures sorted by severity (attribute + GIP failures by severity, inspection points sorted last); "Complete" → `completeInspection()` → `router.replace` to `report`
@@ -229,6 +231,21 @@ Controlled by `is_numeric` in `column_configs` (same applies to `global_inspecti
 
 Toggle changed in Settings per column. Switching to Text clears any existing tolerance.
 
+### Tolerance Types
+
+Four tolerance types for numeric columns:
+
+| Type | Pass condition | `tolerance.value` |
+|------|---------------|-------------------|
+| `absolute` | `|measured − ref| ≤ value` | required (`number`) |
+| `percent` | `|measured − ref| / |ref| × 100 ≤ value` | required (`number`) |
+| `min` | `measured ≥ bound` | `number` or `null` |
+| `max` | `measured ≤ bound` | `number` or `null` |
+
+For `min` and `max`, `tolerance.value` may be `null` — this means "use the product's reference value as the bound". The placeholder in Settings shows `"use ref value"` when empty. For `absolute`/`percent`, a value is always required.
+
+The DB stores `null` in `tolerance_value` for min/max with no explicit bound — this is valid and intentional. All 6 inline tolerance loaders (use-settings.ts ×2, report.tsx ×2, template.tsx ×2) must use the IIFE pattern that preserves `null` for min/max (see Gotcha #18).
+
 ---
 
 ## Global Inspection Points
@@ -269,15 +286,16 @@ Two modes controlled by `inspections.report_type`:
 
 ### Normal (per-product)
 - One PDF per product; multiple products show per-product tabs on the report screen
-- PDF saved to `Paths.document.uri + 'reports/{productId}_{inspectionId}.pdf'`
+- PDF saved to `Paths.document.uri + 'reports/{Supplier}_{InvoiceNo}_{ProductID}.pdf'`
 
 ### Nested (combined, multi-product)
-- Single PDF for all products combined; saved to `Paths.document.uri + 'reports/nested_{inspectionId}.pdf'`
+- Single PDF for all products combined; saved to `Paths.document.uri + 'reports/{Supplier}_{InvoiceNo}_{ProductID1}-{ProductID2}.pdf'`
 - Attribute/GIP table uses `rowspan` on the attribute cell so each attribute row spans all N product sub-rows
 - Inspection points section lists per-product groups with a blue sub-header per product
 - Header shows: date, inspector, supplier, location, invoice NO; Products table; per-product summary stats
 
 ### Common to both
+- PDF filename built by `buildReportFilename(supplier, invoiceNo, productIds[])` in `pdf-generator.ts` — falls back to `NoSupplier`/`NoInvoice`/`NoProduct`; special characters stripped, spaces → underscores
 - Uses `expo-print` (`printToFileAsync`) → HTML string with inline CSS only
 - Header includes: inspector name (if set), supplier, location, invoice NO, production %, packing % (when set)
 - Stats: Passed / Failed / Total Filled
@@ -285,6 +303,8 @@ Two modes controlled by `inspections.report_type`:
 - Detailed failures list: attribute + GIP failures grouped by severity, then inspection point failures flat
 - **Product Attribute Results** table (7 columns): Attribute | Sample Size | Reference | Measured | Result | Note | Photo — includes both product info columns and global inspection points (GIPs grouped by group_name; ungrouped GIPs under "Global Inspection Points" sub-header)
 - **Inspection Points** table (5 columns): Inspection Point | Sample Size | Result | Note | Photo
+- Data rows alternate between white and `#f3f3f3` (light grey) for readability — row index is tracked across group boundaries
+- Group sub-headers use `background:#d0e4f8; color:#1a5fa8` (blue-tinted) to clearly separate them from alternating data rows; `<th>` column headers use `#d0d0d0` mid-grey
 - Photos embedded as `data:image/jpeg;base64,...` — printed **4-per-page in a 2×2 CSS grid** (`<div class="photo-page">`), each page forced with `page-break-after: always`
 - **Photos section always starts on a new page** via `page-break-before: always` on the wrapping div
 - "Photo N" references in all tables are `<a href="#photo-N">` anchor links; each photo block has `id="photo-N"` — PDF viewers jump to the correct page
@@ -362,3 +382,5 @@ git push origin feature/pdf-improvements
 15. Do NOT use `react-native-zip-archive` — it requires a native module that isn't in the dev build and crashes on import. Use `jszip` (pure JS) instead: `zip.file(name, await new File(uri).bytes())`, then `zipFile.write(await zip.generateAsync({ type: 'uint8array' }))`.
 16. For nested reports, inspection point pointKeys in `results` are translated from `ip:{index}` to the actual text string before being passed to `generateNestedReport` — the resultMap is therefore keyed by `{productId}:{pointText}` for inspection points.
 17. The `report_type` column defaults to `'normal'` in the DB — existing inspections without this column (before migration v6) behave as normal reports. Always use `inspection.reportType ?? 'normal'` when reading it.
+18. Min/Max tolerance with `null` value means "compare against the product reference value at inspection time." All 6 inline tolerance loaders must use the IIFE pattern: `if (type === 'min' || type === 'max') return { type, value: r.tolerance_value }` — passing `null` through. The earlier guard `r.tolerance_value != null` silently dropped these entries; do not reintroduce it for min/max.
+19. PDF row shading uses a `rowIdx` counter that increments for every data row regardless of group boundaries — do not reset the counter per group or the alternating pattern breaks at group sub-headers. In nested reports, use a separate `nestedAttrIdx` counter in the outer closure of `nestedRows()` so the shade is consistent across all product sub-rows for the same attribute.
