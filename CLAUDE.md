@@ -13,6 +13,7 @@ Inspectors visit production sites, log results against product reference data, a
 - **expo-router v4** — file-based routing with typed routes enabled (`typedRoutes: true`)
 - **expo-sqlite v15** — local database only, fully offline, no cloud sync
 - **expo-file-system v17** — new API: use `File`, `Directory`, `Paths` classes (NOT the deprecated `readAsStringAsync` etc.)
+- **expo-image-manipulator v13** — used to resize photos before PDF embedding (see Gotcha #21)
 - **React Compiler enabled** — do NOT add manual `useMemo`/`useCallback` unless profiling shows need
 - **TypeScript strict mode**
 
@@ -301,13 +302,15 @@ Two modes controlled by `inspections.report_type`:
 - Stats: Passed / Failed / Total Filled
 - **Failures by Criticality** summary table: High N, Medium N, Low N (attributes + GIPs combined), Inspection Points N
 - Detailed failures list: attribute + GIP failures grouped by severity, then inspection point failures flat
-- **Product Attribute Results** table (7 columns): Attribute | Sample Size | Reference | Measured | Result | Note | Photo — includes both product info columns and global inspection points (GIPs grouped by group_name; ungrouped GIPs under "Global Inspection Points" sub-header)
-- **Inspection Points** table (5 columns): Inspection Point | Sample Size | Result | Note | Photo
+- **Product Attribute Results** table (7 columns): Attribute | Sample Size | Reference | Measured | Result | Note | **Media** — includes both product info columns and global inspection points (GIPs grouped by group_name; ungrouped GIPs under "Global Inspection Points" sub-header)
+- **Inspection Points** table (5 columns): Inspection Point | Sample Size | Result | Note | **Media**
+- The **Media** column combines photo anchor links (`Photo 1, Photo 2`) and plain-text video labels (`Video 1`) for every result row — all photos are linked, not just the first
 - Data rows alternate between white and `#f3f3f3` (light grey) for readability — row index is tracked across group boundaries
 - Group sub-headers use `background:#d0e4f8; color:#1a5fa8` (blue-tinted) to clearly separate them from alternating data rows; `<th>` column headers use `#d0d0d0` mid-grey
-- Photos embedded as `data:image/jpeg;base64,...` — printed **4-per-page in a 2×2 CSS grid** (`<div class="photo-page">`), each page forced with `page-break-after: always`
-- **Photos section always starts on a new page** via `page-break-before: always` on the wrapping div
-- "Photo N" references in all tables are `<a href="#photo-N">` anchor links; each photo block has `id="photo-N"` — PDF viewers jump to the correct page
+- Photos are **resized to 1200 px wide, 70 % JPEG quality** via `expo-image-manipulator` before base64 encoding — prevents Android OOM during `printToFileAsync` (see Gotcha #21)
+- Photos printed **4-per-page** in a flex-column layout (`<div class="photo-page">`), grouped into `.photo-row` pairs; `height: calc(100vh - 48px)` with `min-height: 0` on all flex children ensures no spillover; "Attached Photos" heading is placed **inside** the first `.photo-page` div as a `flex: 0 0 auto` item
+- **Photos section always starts on a new page** via `page-break-before: always` on the wrapping div; `page-break-after: always` on each `.photo-page`
+- `Photo N` references in all tables are `<a href="#photo-N">` anchor links; each photo block has `id="photo-N"` — PDF viewers jump to the correct page
 - "↺ Regenerate PDF" and "✏ Edit" buttons in footer; Edit navigates back to `template.tsx` regardless of status
 - If videos were recorded, share bundles PDF + videos in a ZIP via `jszip` (pure JS — no native module needed); otherwise shares PDF directly
 
@@ -320,13 +323,16 @@ Two modes controlled by `inspections.report_type`:
 - Stored as `inspection_results.video_uris` (JSON array of local URIs)
 - Videos are **not embedded in the PDF** — they are bundled with the PDF into a ZIP when sharing
 - ZIP is generated with `jszip` (pure JS library) — do NOT use `react-native-zip-archive` (native module, not in dev build)
-- `File.bytes()` reads a file as `Uint8Array`; `File.write(Uint8Array)` writes it — used for jszip integration
+- **ZIP naming**: the PDF inside the ZIP is named identically to the ZIP file (e.g. `Supplier_INV_PROD.pdf`); videos are named `video_1_Supplier_INV_PROD.mp4`, `video_2_Supplier_INV_PROD.mp4`, etc. — `baseName` is derived from the PDF URI in `shareBundle()`
+- `shareBundle()` writes the ZIP using `FileHandle.writeBytes()` (not `File.write()`) — Android's `FileChannel.write()` does not guarantee a full write for large buffers; `FileHandle` loops until all bytes are written (see Gotcha #25)
+- `File.bytes()` reads a file as `Uint8Array` — used for reading photos/videos into jszip
 - Video chips appear below photo thumbnails in the template row; tapping "×" removes a video
 
 ---
 
 ## Template UI: Collapse/Expand
 
+- **All sections collapsed by default** — `collapsedProducts` and `collapsedGroups` are populated at the end of `load()` from the built sections; do not initialise them as empty sets
 - **Product sections**: tap the product name header (▼/▶ chevron) to collapse/expand all items for that product
 - **Group sub-headers**: tap any group sub-header (▼/▶ chevron) to collapse/expand items in that group
 - "Global Inspection Points" sub-header is collapsible like named groups (only shown when ungrouped GIPs exist)
@@ -384,3 +390,9 @@ git push origin feature/pdf-improvements
 17. The `report_type` column defaults to `'normal'` in the DB — existing inspections without this column (before migration v6) behave as normal reports. Always use `inspection.reportType ?? 'normal'` when reading it.
 18. Min/Max tolerance with `null` value means "compare against the product reference value at inspection time." All 6 inline tolerance loaders must use the IIFE pattern: `if (type === 'min' || type === 'max') return { type, value: r.tolerance_value }` — passing `null` through. The earlier guard `r.tolerance_value != null` silently dropped these entries; do not reintroduce it for min/max.
 19. PDF row shading uses a `rowIdx` counter that increments for every data row regardless of group boundaries — do not reset the counter per group or the alternating pattern breaks at group sub-headers. In nested reports, use a separate `nestedAttrIdx` counter in the outer closure of `nestedRows()` so the shade is consistent across all product sub-rows for the same attribute.
+20. The PDF "Photo" column is now called **"Media"** and combines photo anchor links and plain-text video labels for every result row. All photos for a result are linked (not just the first). `photoNumberMap` is `Map<string, number[]>`. Do not revert to a single `number` map or a separate video column.
+21. Photos must be resized before PDF embedding — `photoToBase64()` in `photo-service.ts` uses `expo-image-manipulator` to resize to 1200 px wide at 70 % JPEG quality. Removing this causes Android `OutOfMemoryError` during `printToFileAsync`. `largeHeap: true` in `app.json` raises the production heap cap to ~512 MB; this has no effect in dev/Expo Go builds.
+22. Scroll restore in `template.tsx` after camera/video capture: (1) call `Keyboard.dismiss()` before opening the picker to prevent mid-layout conflicts when a keyboard is open in another row; (2) use `setTimeout(() => { ... }, 50)` — not `requestAnimationFrame` — to give the SectionList time to settle; (3) guard with `typeof list.scrollToOffset === 'function'` — optional chaining `?.` alone crashes under the React Compiler when the ref is in a transitional state.
+23. `createInspection()` in `use-inspections.ts` stores the **sum** of all products' `unitsInspected` and `batchSize` in the `inspections` table row — this is the value shown in the inspections list. Per-product values are stored correctly in `inspection_products` and used by the PDF generator.
+24. `canStart` in `new.tsx` validates units/batch with `parseInt(...) > 0` — this correctly rejects empty strings, zero, negatives, and non-numeric text (since `NaN > 0 === false`). Do not revert to a truthiness check (`!!u?.units`) which allows any non-empty string through.
+25. `shareBundle()` in `report.tsx` writes the ZIP using `FileHandle.writeBytes()` (not `File.write(Uint8Array)`). On Android, `File.write()` calls `FileChannel.write()` once without a loop and can silently truncate large files (>4 MB). `FileHandle.writeBytes()` loops until all bytes are written and is safe for any size.

@@ -23,21 +23,26 @@ interface ProductReport {
 
 async function shareBundle(pdfUri: string, videoUris: string[]): Promise<void> {
   const zip = new JSZip();
+  const pdfFilename = pdfUri.split('/').pop() ?? 'report.pdf';
+  const baseName = pdfFilename.replace(/\.pdf$/i, '');
 
-  zip.file('report.pdf', await new File(pdfUri).bytes());
+  zip.file(`${baseName}.pdf`, await new File(pdfUri).bytes());
 
   for (let i = 0; i < videoUris.length; i++) {
     const uri = videoUris[i];
     const ext = uri.split('.').pop()?.toLowerCase() ?? 'mp4';
-    zip.file(`video_${i + 1}.${ext}`, await new File(uri).bytes());
+    zip.file(`video_${i + 1}_${baseName}.${ext}`, await new File(uri).bytes());
   }
 
   const zipBytes = await zip.generateAsync({ type: 'uint8array' });
 
-  const zipUri = Paths.document.uri + 'inspection_report.zip';
+  const zipUri = Paths.document.uri + baseName + '.zip';
   const zipFile = new File(zipUri);
   if (zipFile.exists) zipFile.delete();
-  zipFile.write(zipBytes);
+  zipFile.create();
+  const handle = zipFile.open();
+  handle.writeBytes(zipBytes);
+  handle.close();
 
   await Sharing.shareAsync(zipUri, { mimeType: 'application/zip' });
 }
@@ -394,9 +399,17 @@ export default function ReportScreen() {
             <ThemedText type="small" style={styles.productName}>
               {currentReport.product.name}
             </ThemedText>
-            <ThemedText type="small" themeColor="textSecondary">
-              ID: {currentReport.product.id}
-            </ThemedText>
+            {inspection?.reportType === 'nested' ? (
+              allProducts.map((p) => (
+                <ThemedText key={p.id} type="small" themeColor="textSecondary">
+                  {p.id} · {p.name}
+                </ThemedText>
+              ))
+            ) : (
+              <ThemedText type="small" themeColor="textSecondary">
+                ID: {currentReport.product.id}
+              </ThemedText>
+            )}
             {currentReport.pdfUri && (
               <View style={styles.readyRow}>
                 <ThemedText style={styles.readyIcon}>✅</ThemedText>

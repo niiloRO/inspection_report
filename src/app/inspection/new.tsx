@@ -111,7 +111,7 @@ export default function NewInspectionScreen() {
     selected.size > 0 &&
     [...selected].every((id) => {
       const u = productUnits.get(id);
-      return !!u?.units && !!u?.batch;
+      return parseInt(u?.units ?? '', 10) > 0 && parseInt(u?.batch ?? '', 10) > 0;
     });
 
   async function handleStart() {

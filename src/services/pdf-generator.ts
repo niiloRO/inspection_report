@@ -58,6 +58,14 @@ function attrStatus(r: InspectionResult | undefined, isNumeric: boolean): 'pass'
   return r.passed ? 'pass' : 'fail';
 }
 
+function mediaCell(photoNums: number[], videoNums: number[]): string {
+  const items = [
+    ...photoNums.map((n) => `<a href="#photo-${n}" style="color:#3c87f7">Photo ${n}</a>`),
+    ...videoNums.map((n) => `Video ${n}`),
+  ];
+  return items.length ? items.join(', ') : '—';
+}
+
 export interface ReportOptions {
   inspection: Inspection;
   product: Product;
@@ -93,16 +101,18 @@ export async function generateProductReport(options: ReportOptions): Promise<str
 
   // Assign sequential photo numbers across all results
   let photoCounter = 1;
-  const photoNumberMap = new Map<string, number>();
+  const photoNumberMap = new Map<string, number[]>();
   const allPhotos: { label: string; num: number; uri: string; b64?: string }[] = [];
 
   for (const r of productResults) {
     if (r.photoUris.length > 0) {
-      photoNumberMap.set(r.pointKey, photoCounter);
+      const nums: number[] = [];
       for (const uri of r.photoUris) {
+        nums.push(photoCounter);
         allPhotos.push({ label: `Photo ${photoCounter}`, num: photoCounter, uri });
         photoCounter++;
       }
+      photoNumberMap.set(r.pointKey, nums);
     }
   }
 
@@ -111,6 +121,14 @@ export async function generateProductReport(options: ReportOptions): Promise<str
       photo.b64 = await photoToBase64(photo.uri);
     } catch {
       // skip unreadable photos
+    }
+  }
+
+  let videoCounter = 1;
+  const videoNumberMap = new Map<string, number[]>();
+  for (const r of productResults) {
+    if (r.videoUris && r.videoUris.length > 0) {
+      videoNumberMap.set(r.pointKey, r.videoUris.map(() => videoCounter++));
     }
   }
 
@@ -193,11 +211,10 @@ export async function generateProductReport(options: ReportOptions): Promise<str
         const gipKey = r.pointKey.replace('gip:', '');
         label = gipMap.get(gipKey)?.label ?? gipKey;
       }
-      const photoNum = photoNumberMap.get(r.pointKey);
       failedSummaryRows += `<tr>
         <td>${escapeHtml(label)}</td>
         <td>${r.note ? escapeHtml(r.note) : '—'}</td>
-        <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
+        <td>${mediaCell(photoNumberMap.get(r.pointKey) ?? [], videoNumberMap.get(r.pointKey) ?? [])}</td>
       </tr>`;
     }
   }
@@ -208,11 +225,10 @@ export async function generateProductReport(options: ReportOptions): Promise<str
     </tr>`;
     for (const r of failedPoints) {
       const label = r.pointKey.length > 80 ? r.pointKey.slice(0, 80) + '…' : r.pointKey;
-      const photoNum = photoNumberMap.get(r.pointKey);
       failedSummaryRows += `<tr>
         <td>${escapeHtml(label)}</td>
         <td>${r.note ? escapeHtml(r.note) : '—'}</td>
-        <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
+        <td>${mediaCell(photoNumberMap.get(r.pointKey) ?? [], videoNumberMap.get(r.pointKey) ?? [])}</td>
       </tr>`;
     }
   }
@@ -238,7 +254,6 @@ export async function generateProductReport(options: ReportOptions): Promise<str
     const refVal = product.attributes[col.key];
     const measuredVal = r?.value ?? '—';
     const st = attrStatus(r, col.isNumeric);
-    const photoNum = photoNumberMap.get(pointKey);
     const noteVal = r?.note ? escapeHtml(r.note) : '—';
     const sampleSizeVal = r?.sampleSize ? escapeHtml(r.sampleSize) : '—';
     const rowBg = rowIndex % 2 === 1 ? ' style="background:#f3f3f3;"' : '';
@@ -249,7 +264,7 @@ export async function generateProductReport(options: ReportOptions): Promise<str
       <td>${st !== 'na' ? escapeHtml(String(measuredVal)) : '—'}</td>
       <td>${statusBadge(st)}</td>
       <td>${noteVal}</td>
-      <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
+      <td>${mediaCell(photoNumberMap.get(pointKey) ?? [], videoNumberMap.get(pointKey) ?? [])}</td>
     </tr>`;
   }
 
@@ -258,7 +273,6 @@ export async function generateProductReport(options: ReportOptions): Promise<str
     const r = resultMap.get(pointKey);
     const measuredVal = r?.value ?? '—';
     const st = attrStatus(r, gip.isNumeric);
-    const photoNum = photoNumberMap.get(pointKey);
     const noteVal = r?.note ? escapeHtml(r.note) : '—';
     const sampleSizeVal = r?.sampleSize ? escapeHtml(r.sampleSize) : '—';
     const rowBg = rowIndex % 2 === 1 ? ' style="background:#f3f3f3;"' : '';
@@ -269,7 +283,7 @@ export async function generateProductReport(options: ReportOptions): Promise<str
       <td>${st !== 'na' ? escapeHtml(String(measuredVal)) : '—'}</td>
       <td>${statusBadge(st)}</td>
       <td>${noteVal}</td>
-      <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
+      <td>${mediaCell(photoNumberMap.get(pointKey) ?? [], videoNumberMap.get(pointKey) ?? [])}</td>
     </tr>`;
   }
 
@@ -310,7 +324,6 @@ export async function generateProductReport(options: ReportOptions): Promise<str
   for (const pip of productInspectionPoints) {
     const r = resultMap.get(pip.pointText);
     const st: 'pass' | 'fail' | 'na' = r ? (r.passed ? 'pass' : 'fail') : 'na';
-    const photoNum = r ? photoNumberMap.get(pip.pointText) : undefined;
     const noteVal = r?.note ? escapeHtml(r.note) : '—';
     const sampleSizeVal = r?.sampleSize ? escapeHtml(r.sampleSize) : '—';
     const rowBg = pointRowIdx % 2 === 1 ? ' style="background:#f3f3f3;"' : '';
@@ -320,23 +333,25 @@ export async function generateProductReport(options: ReportOptions): Promise<str
       <td>${sampleSizeVal}</td>
       <td>${statusBadge(st)}</td>
       <td>${noteVal}</td>
-      <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
+      <td>${mediaCell(photoNumberMap.get(pip.pointText) ?? [], videoNumberMap.get(pip.pointText) ?? [])}</td>
     </tr>`;
   }
 
-  // --- Photos section (4 per page, 2×2 grid) ---
+  // --- Photos section (4 per page, 2×2 flex layout) ---
   const readyPhotos = allPhotos.filter((p) => p.b64);
   let photosHtml = '';
   if (readyPhotos.length > 0) {
     const pages: string[] = [];
     for (let i = 0; i < readyPhotos.length; i += 4) {
       const chunk = readyPhotos.slice(i, i + 4);
-      const blocks = chunk.map((photo) => `
-        <div class="photo-block" id="photo-${photo.num}">
-          <p class="photo-label">${escapeHtml(photo.label)}</p>
-          <img src="data:image/jpeg;base64,${photo.b64}" />
-        </div>`).join('');
-      pages.push(`<div class="photo-page">${blocks}</div>`);
+      const makeBlock = (photo: typeof readyPhotos[0]) =>
+        `<div class="photo-block" id="photo-${photo.num}"><p class="photo-label">${escapeHtml(photo.label)}</p><img src="data:image/jpeg;base64,${photo.b64}" /></div>`;
+      const row1 = chunk.slice(0, 2).map(makeBlock).join('');
+      const row2 = chunk.slice(2, 4).map(makeBlock).join('');
+      const titleHtml = i === 0
+        ? `<h2 style="margin:0 0 6px;font-size:15px;border-bottom:1px solid #ddd;padding-bottom:4px;flex:0 0 auto;">Attached Photos</h2>`
+        : '';
+      pages.push(`<div class="photo-page">${titleHtml}<div class="photo-row">${row1}</div>${row2 ? `<div class="photo-row">${row2}</div>` : ''}</div>`);
     }
     photosHtml = pages.join('');
   }
@@ -373,10 +388,11 @@ export async function generateProductReport(options: ReportOptions): Promise<str
   table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 16px; }
   th { background: #d0d0d0; text-align: left; padding: 6px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
   td { padding: 5px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
-  .photo-page { page-break-after: always; break-after: page; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 10px; height: 100vh; box-sizing: border-box; padding: 4px; }
-  .photo-block { display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; border: 1px solid #eee; border-radius: 4px; padding: 6px; }
-  .photo-block img { max-width: 100%; max-height: calc(50vh - 40px); object-fit: contain; }
-  .photo-label { font-weight: bold; font-size: 11px; margin-bottom: 4px; text-align: center; }
+  .photo-page { page-break-after: always; break-after: page; display: flex; flex-direction: column; gap: 8px; height: calc(100vh - 48px); box-sizing: border-box; padding: 4px; }
+  .photo-row { display: flex; flex: 1; gap: 8px; min-height: 0; }
+  .photo-block { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; border: 1px solid #eee; border-radius: 4px; padding: 6px; min-height: 0; }
+  .photo-block img { flex: 1; min-height: 0; max-width: 100%; object-fit: contain; }
+  .photo-label { font-weight: bold; font-size: 11px; margin-bottom: 4px; flex-shrink: 0; text-align: center; }
 </style>
 </head>
 <body>
@@ -401,7 +417,7 @@ ${criticalityOverview}
 ${failedSummaryRows ? `
 <h2>Failed Points Detail</h2>
 <table>
-  <tr><th>Inspection Point</th><th>Note</th><th>Photo</th></tr>
+  <tr><th>Inspection Point</th><th>Note</th><th>Media</th></tr>
   ${failedSummaryRows}
 </table>
 ` : '<p style="color:#27ae60;font-weight:bold;">&#10003; All filled inspection points passed</p>'}
@@ -409,7 +425,7 @@ ${failedSummaryRows ? `
 ${attributeRows ? `
 <h2>Product Attribute Results</h2>
 <table>
-  <tr><th>Attribute</th><th>Sample Size</th><th>Reference</th><th>Measured</th><th>Result</th><th>Note</th><th>Photo</th></tr>
+  <tr><th>Attribute</th><th>Sample Size</th><th>Reference</th><th>Measured</th><th>Result</th><th>Note</th><th>Media</th></tr>
   ${attributeRows}
 </table>
 ` : ''}
@@ -417,12 +433,12 @@ ${attributeRows ? `
 ${pointRows ? `
 <h2>Inspection Points</h2>
 <table>
-  <tr><th style="width:45%">Inspection Point</th><th>Sample Size</th><th>Result</th><th>Note</th><th>Photo</th></tr>
+  <tr><th style="width:45%">Inspection Point</th><th>Sample Size</th><th>Result</th><th>Note</th><th>Media</th></tr>
   ${pointRows}
 </table>
 ` : ''}
 
-${photosHtml ? `<div style="page-break-before:always;break-before:page;"><h2>Attached Photos</h2>${photosHtml}</div>` : ''}
+${photosHtml ? `<div style="page-break-before:always;break-before:page;">${photosHtml}</div>` : ''}
 
 </body>
 </html>`;
@@ -465,17 +481,19 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
   }
 
   let photoCounter = 1;
-  const photoNumberMap = new Map<string, number>();
+  const photoNumberMap = new Map<string, number[]>();
   const allPhotos: { label: string; num: number; uri: string; b64?: string }[] = [];
 
   function collectPhotos(productId: string, pointKey: string) {
     const r = resultMap.get(`${productId}:${pointKey}`);
     if (r && r.photoUris.length > 0) {
-      photoNumberMap.set(`${productId}:${pointKey}`, photoCounter);
+      const nums: number[] = [];
       for (const uri of r.photoUris) {
+        nums.push(photoCounter);
         allPhotos.push({ label: `Photo ${photoCounter}`, num: photoCounter, uri });
         photoCounter++;
       }
+      photoNumberMap.set(`${productId}:${pointKey}`, nums);
     }
   }
 
@@ -504,6 +522,14 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
 
   for (const photo of allPhotos) {
     try { photo.b64 = await photoToBase64(photo.uri); } catch { /* skip */ }
+  }
+
+  let videoCounter = 1;
+  const videoNumberMap = new Map<string, number[]>();
+  for (const r of results) {
+    if (r.videoUris && r.videoUris.length > 0) {
+      videoNumberMap.set(`${r.productId}:${r.pointKey}`, r.videoUris.map(() => videoCounter++));
+    }
   }
 
   const dateStr = new Date(inspection.date).toLocaleDateString(undefined, {
@@ -590,11 +616,12 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
         const label = r.type === 'attribute'
           ? (colMap.get(r.pointKey.replace('attr:', ''))?.label ?? r.pointKey)
           : (gipMap.get(r.pointKey.replace('gip:', ''))?.label ?? r.pointKey);
-        const photoNum = photoNumberMap.get(`${product.id}:${r.pointKey}`);
+        const photoNums = photoNumberMap.get(`${product.id}:${r.pointKey}`) ?? [];
+        const videoNums = videoNumberMap.get(`${product.id}:${r.pointKey}`) ?? [];
         failRows += `<tr>
           <td>${escapeHtml(label)}</td>
           <td>${r.note ? escapeHtml(r.note) : '—'}</td>
-          <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
+          <td>${mediaCell(photoNums, videoNums)}</td>
         </tr>`;
       }
     }
@@ -603,15 +630,16 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
         <td colspan="3" style="padding:4px 8px;font-size:11px;font-weight:bold;color:#333;">INSPECTION POINTS (${failedPoints.length})</td>
       </tr>`;
       for (const r of failedPoints) {
-        const photoNum = photoNumberMap.get(`${product.id}:${r.pointKey}`);
+        const photoNums = photoNumberMap.get(`${product.id}:${r.pointKey}`) ?? [];
+        const videoNums = videoNumberMap.get(`${product.id}:${r.pointKey}`) ?? [];
         failRows += `<tr>
           <td>${escapeHtml(r.pointKey)}</td>
           <td>${r.note ? escapeHtml(r.note) : '—'}</td>
-          <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
+          <td>${mediaCell(photoNums, videoNums)}</td>
         </tr>`;
       }
     }
-    failuresHtml += `<table><tr><th>Point</th><th>Note</th><th>Photo</th></tr>${failRows}</table>`;
+    failuresHtml += `<table><tr><th>Point</th><th>Note</th><th>Media</th></tr>${failRows}</table>`;
   }
 
   // Nested attribute/GIP table
@@ -635,7 +663,8 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
         const r = resultMap.get(`${product.id}:${pk}`);
         const st = attrStatus(r, col.isNumeric);
         const measuredVal = r?.value ?? '—';
-        const photoNum = photoNumberMap.get(`${product.id}:${pk}`);
+        const photoNums = photoNumberMap.get(`${product.id}:${pk}`) ?? [];
+        const videoNums = videoNumberMap.get(`${product.id}:${pk}`) ?? [];
         if (pi === 0) {
           rows += `<tr${trStyle}>
             <td rowspan="${n}" style="vertical-align:middle;font-weight:500;${bg ? `background:${bg};` : ''}">${escapeHtml(col.label)}</td>
@@ -645,7 +674,7 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
             <td>${st !== 'na' ? escapeHtml(String(measuredVal)) : '—'}</td>
             <td>${statusBadge(st)}</td>
             <td>${r?.note ? escapeHtml(r.note) : '—'}</td>
-            <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
+            <td>${mediaCell(photoNums, videoNums)}</td>
           </tr>`;
         } else {
           rows += `<tr${trStyle}>
@@ -655,7 +684,7 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
             <td>${st !== 'na' ? escapeHtml(String(measuredVal)) : '—'}</td>
             <td>${statusBadge(st)}</td>
             <td>${r?.note ? escapeHtml(r.note) : '—'}</td>
-            <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
+            <td>${mediaCell(photoNums, videoNums)}</td>
           </tr>`;
         }
       });
@@ -669,7 +698,8 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
         const r = resultMap.get(`${product.id}:${pk}`);
         const st = attrStatus(r, gip.isNumeric);
         const measuredVal = r?.value ?? '—';
-        const photoNum = photoNumberMap.get(`${product.id}:${pk}`);
+        const photoNums = photoNumberMap.get(`${product.id}:${pk}`) ?? [];
+        const videoNums = videoNumberMap.get(`${product.id}:${pk}`) ?? [];
         if (pi === 0) {
           rows += `<tr${trStyle}>
             <td rowspan="${n}" style="vertical-align:middle;font-weight:500;${bg ? `background:${bg};` : ''}">${escapeHtml(gip.label)}</td>
@@ -679,7 +709,7 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
             <td>${st !== 'na' ? escapeHtml(String(measuredVal)) : '—'}</td>
             <td>${statusBadge(st)}</td>
             <td>${r?.note ? escapeHtml(r.note) : '—'}</td>
-            <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
+            <td>${mediaCell(photoNums, videoNums)}</td>
           </tr>`;
         } else {
           rows += `<tr${trStyle}>
@@ -689,7 +719,7 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
             <td>${st !== 'na' ? escapeHtml(String(measuredVal)) : '—'}</td>
             <td>${statusBadge(st)}</td>
             <td>${r?.note ? escapeHtml(r.note) : '—'}</td>
-            <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
+            <td>${mediaCell(photoNums, videoNums)}</td>
           </tr>`;
         }
       });
@@ -724,7 +754,8 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
     for (const pip of points) {
       const r = resultMap.get(`${product.id}:${pip.pointText}`);
       const st: 'pass' | 'fail' | 'na' = r ? (r.passed ? 'pass' : 'fail') : 'na';
-      const photoNum = photoNumberMap.get(`${product.id}:${pip.pointText}`);
+      const photoNums = photoNumberMap.get(`${product.id}:${pip.pointText}`) ?? [];
+      const videoNums = videoNumberMap.get(`${product.id}:${pip.pointText}`) ?? [];
       const rowBg = ipRowIdx % 2 === 1 ? ' style="background:#f3f3f3;"' : '';
       ipRowIdx++;
       pointRows += `<tr${rowBg}>
@@ -732,24 +763,26 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
         <td>${r?.sampleSize ? escapeHtml(r.sampleSize) : '—'}</td>
         <td>${statusBadge(st)}</td>
         <td>${r?.note ? escapeHtml(r.note) : '—'}</td>
-        <td>${photoNum ? `<a href="#photo-${photoNum}" style="color:#3c87f7">Photo ${photoNum}</a>` : '—'}</td>
+        <td>${mediaCell(photoNums, videoNums)}</td>
       </tr>`;
     }
   }
 
-  // Photos
+  // Photos (4 per page, 2×2 flex layout)
   const readyPhotos = allPhotos.filter((p) => p.b64);
   let photosHtml = '';
   if (readyPhotos.length > 0) {
     const pages: string[] = [];
     for (let i = 0; i < readyPhotos.length; i += 4) {
       const chunk = readyPhotos.slice(i, i + 4);
-      const blocks = chunk.map((photo) => `
-        <div class="photo-block" id="photo-${photo.num}">
-          <p class="photo-label">${escapeHtml(photo.label)}</p>
-          <img src="data:image/jpeg;base64,${photo.b64}" />
-        </div>`).join('');
-      pages.push(`<div class="photo-page">${blocks}</div>`);
+      const makeBlock = (photo: typeof readyPhotos[0]) =>
+        `<div class="photo-block" id="photo-${photo.num}"><p class="photo-label">${escapeHtml(photo.label)}</p><img src="data:image/jpeg;base64,${photo.b64}" /></div>`;
+      const row1 = chunk.slice(0, 2).map(makeBlock).join('');
+      const row2 = chunk.slice(2, 4).map(makeBlock).join('');
+      const titleHtml = i === 0
+        ? `<h2 style="margin:0 0 6px;font-size:15px;border-bottom:1px solid #ddd;padding-bottom:4px;flex:0 0 auto;">Attached Photos</h2>`
+        : '';
+      pages.push(`<div class="photo-page">${titleHtml}<div class="photo-row">${row1}</div>${row2 ? `<div class="photo-row">${row2}</div>` : ''}</div>`);
     }
     photosHtml = pages.join('');
   }
@@ -767,10 +800,11 @@ export async function generateNestedReport(options: NestedReportOptions): Promis
   table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 16px; }
   th { background: #d0d0d0; text-align: left; padding: 6px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
   td { padding: 5px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
-  .photo-page { page-break-after: always; break-after: page; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 10px; height: 100vh; box-sizing: border-box; padding: 4px; }
-  .photo-block { display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; border: 1px solid #eee; border-radius: 4px; padding: 6px; }
-  .photo-block img { max-width: 100%; max-height: calc(50vh - 40px); object-fit: contain; }
-  .photo-label { font-weight: bold; font-size: 11px; margin-bottom: 4px; text-align: center; }
+  .photo-page { page-break-after: always; break-after: page; display: flex; flex-direction: column; gap: 8px; height: calc(100vh - 48px); box-sizing: border-box; padding: 4px; }
+  .photo-row { display: flex; flex: 1; gap: 8px; min-height: 0; }
+  .photo-block { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; border: 1px solid #eee; border-radius: 4px; padding: 6px; min-height: 0; }
+  .photo-block img { flex: 1; min-height: 0; max-width: 100%; object-fit: contain; }
+  .photo-label { font-weight: bold; font-size: 11px; margin-bottom: 4px; flex-shrink: 0; text-align: center; }
 </style>
 </head>
 <body>
@@ -798,7 +832,7 @@ ${failuresHtml ? `<h2>Failures Detail</h2>${failuresHtml}` : '<p style="color:#2
 ${attributeRows ? `
 <h2>Product Attribute Results</h2>
 <table>
-  <tr><th>Attribute</th><th>Product ID</th><th>Sample Size</th><th>Reference</th><th>Measured</th><th>Result</th><th>Note</th><th>Photo</th></tr>
+  <tr><th>Attribute</th><th>Product ID</th><th>Sample Size</th><th>Reference</th><th>Measured</th><th>Result</th><th>Note</th><th>Media</th></tr>
   ${attributeRows}
 </table>
 ` : ''}
@@ -806,12 +840,12 @@ ${attributeRows ? `
 ${pointRows ? `
 <h2>Inspection Points</h2>
 <table>
-  <tr><th style="width:35%">Inspection Point</th><th>Sample Size</th><th>Result</th><th>Note</th><th>Photo</th></tr>
+  <tr><th style="width:35%">Inspection Point</th><th>Sample Size</th><th>Result</th><th>Note</th><th>Media</th></tr>
   ${pointRows}
 </table>
 ` : ''}
 
-${photosHtml ? `<div style="page-break-before:always;break-before:page;"><h2>Attached Photos</h2>${photosHtml}</div>` : ''}
+${photosHtml ? `<div style="page-break-before:always;break-before:page;">${photosHtml}</div>` : ''}
 
 </body>
 </html>`;

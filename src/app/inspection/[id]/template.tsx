@@ -2,6 +2,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -221,6 +222,9 @@ export default function TemplateScreen() {
   const [collapsedProducts, setCollapsedProducts] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
+  const listRef = useRef<SectionList<SectionItem, Section>>(null);
+  const scrollOffsetRef = useRef(0);
+
   const photoCounterRef = useRef(1);
   const photoCountersMap = useRef<Map<string, number>>(new Map());
 
@@ -387,6 +391,15 @@ export default function TemplateScreen() {
       setSections(built);
       setTotalItems(total);
       setFilledCount(data.existingResults.size);
+
+      setCollapsedProducts(new Set(built.map((s) => s.productId)));
+      const allGroupKeys = new Set<string>();
+      for (const section of built) {
+        for (const item of section.data) {
+          if (item.kind === 'group-header') allGroupKeys.add(item.groupKey);
+        }
+      }
+      setCollapsedGroups(allGroupKeys);
     } finally {
       setLoading(false);
     }
@@ -484,12 +497,20 @@ export default function TemplateScreen() {
   }
 
   async function handleAddPhoto(productId: string, pointKey: string) {
+    Keyboard.dismiss();
     const entry = getEntry(productId, pointKey);
     const uri = await takePhoto(id, pointKey);
     if (!uri) return;
     const updated: ResultEntry = { ...entry, photoUris: [...entry.photoUris, uri] };
     scheduleSave(productId, pointKey, updated, true);
     forceUpdate((n) => n + 1);
+    const savedOffset = scrollOffsetRef.current;
+    setTimeout(() => {
+      const list = listRef.current;
+      if (list && typeof list.scrollToOffset === 'function') {
+        list.scrollToOffset({ offset: savedOffset, animated: false });
+      }
+    }, 50);
   }
 
   function handleRemovePhoto(productId: string, pointKey: string, uri: string) {
@@ -500,12 +521,20 @@ export default function TemplateScreen() {
   }
 
   async function handleAddVideo(productId: string, pointKey: string) {
+    Keyboard.dismiss();
     const entry = getEntry(productId, pointKey);
     const uri = await recordVideo(id, pointKey);
     if (!uri) return;
     const updated: ResultEntry = { ...entry, videoUris: [...entry.videoUris, uri] };
     scheduleSave(productId, pointKey, updated, true);
     forceUpdate((n) => n + 1);
+    const savedOffset = scrollOffsetRef.current;
+    setTimeout(() => {
+      const list = listRef.current;
+      if (list && typeof list.scrollToOffset === 'function') {
+        list.scrollToOffset({ offset: savedOffset, animated: false });
+      }
+    }, 50);
   }
 
   function handleRemoveVideo(productId: string, pointKey: string, uri: string) {
@@ -656,6 +685,7 @@ export default function TemplateScreen() {
       </View>
 
       <SectionList
+        ref={listRef}
         sections={sections}
         keyExtractor={(item) => item.key}
         renderItem={renderItem}
@@ -663,6 +693,8 @@ export default function TemplateScreen() {
         removeClippedSubviews
         keyboardShouldPersistTaps="handled"
         automaticallyAdjustKeyboardInsets
+        onScroll={({ nativeEvent }) => { scrollOffsetRef.current = nativeEvent.contentOffset.y; }}
+        scrollEventThrottle={16}
         renderSectionHeader={({ section }) => {
           const isCollapsed = collapsedProducts.has(section.productId);
           return (

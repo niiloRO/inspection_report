@@ -148,10 +148,12 @@ export function useInspections() {
   }): Promise<string> {
     const id = generateId();
     const date = new Date().toISOString();
+    const totalUnits = data.productIds.reduce((s, pid) => s + (data.productUnits.get(pid)?.unitsInspected ?? 1), 0);
+    const totalBatch = data.productIds.reduce((s, pid) => s + (data.productUnits.get(pid)?.batchSize ?? 1), 0);
     await db.withTransactionAsync(async () => {
       await db.runAsync(
-        'INSERT INTO inspections (id, date, units_inspected, batch_size, status, supplier, location, invoice_no, inspector_name, report_type) VALUES (?, ?, 1, 1, ?, ?, ?, ?, ?, ?)',
-        [id, date, 'in_progress', data.supplier ?? null, data.location ?? null, data.invoiceNo ?? null, data.inspectorName ?? null, data.reportType ?? 'normal'],
+        'INSERT INTO inspections (id, date, units_inspected, batch_size, status, supplier, location, invoice_no, inspector_name, report_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, date, totalUnits, totalBatch, 'in_progress', data.supplier ?? null, data.location ?? null, data.invoiceNo ?? null, data.inspectorName ?? null, data.reportType ?? 'normal'],
       );
       for (const productId of data.productIds) {
         const units = data.productUnits.get(productId) ?? { unitsInspected: 1, batchSize: 1 };

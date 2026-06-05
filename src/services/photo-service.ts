@@ -1,4 +1,5 @@
 import { Directory, File, Paths } from 'expo-file-system';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 
 function inspectionPhotoDirUri(inspectionId: string): string {
@@ -55,5 +56,10 @@ export function deleteInspectionPhotos(inspectionId: string): void {
 }
 
 export async function photoToBase64(uri: string): Promise<string> {
-  return new File(uri).base64();
+  const result = await ImageManipulator.manipulateAsync(
+    uri,
+    [{ resize: { width: 1200 } }],
+    { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+  );
+  return result.base64!;
 }
